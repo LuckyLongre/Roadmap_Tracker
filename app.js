@@ -236,22 +236,60 @@ const StorageService = {
     },
 
     exportProgress(phases) {
-        const data = phases.map(phase => ({
-            phase: phase.data.phase,
-            title: phase.data.title,
-            completionMap: this.serializeCompletionMap(phase.root),
-            progress: phase.root.calculateProgress(),
-            exportedAt: new Date().toISOString()
-        }));
+        // Export complete phase data along with progress
+        const exportData = {
+            exportVersion: '1.0',
+            exportDate: new Date().toISOString(),
+            appName: 'LearnPath - Visual Learning Tracker',
+            phases: phases.map((phase, index) => ({
+                index: index,
+                data: phase.data, // Complete original phase data
+                completionMap: this.serializeCompletionMap(phase.root),
+                metadata: {
+                    totalNodes: this.countNodes(phase.root),
+                    completedNodes: this.countCompletedNodes(phase.root),
+                    progressPercentage: phase.root.calculateProgress()
+                }
+            }))
+        };
 
-        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `learning-progress-${new Date().toISOString().split('T')[0]}.json`;
+        a.download = `learnpath-export-${new Date().toISOString().split('T')[0]}.json`;
         a.click();
         URL.revokeObjectURL(url);
         return true;
+    },
+
+    importProgress(importData) {
+        // Validate import data structure
+        if (!importData.exportVersion || importData.exportVersion !== '1.0') {
+            throw new Error('Invalid export file format');
+        }
+        
+        if (!importData.phases || !Array.isArray(importData.phases)) {
+            throw new Error('Invalid export file structure');
+        }
+
+        return importData.phases;
+    },
+
+    countNodes(node) {
+        let count = 1;
+        node.children.forEach(child => {
+            count += this.countNodes(child);
+        });
+        return count;
+    },
+
+    countCompletedNodes(node) {
+        let count = node.completed ? 1 : 0;
+        node.children.forEach(child => {
+            count += this.countCompletedNodes(child);
+        });
+        return count;
     },
 
     clearAllProgress() {
@@ -551,6 +589,220 @@ const UploadModal = ({ isOpen, onClose, onUpload }) => {
     );
 };
 
+const ImportModal = ({ isOpen, onClose, onImport }) => {
+    const [dragOver, setDragOver] = React.useState(false);
+    const [importMode, setImportMode] = React.useState('append'); // 'append' or 'overwrite'
+    const [selectedFile, setSelectedFile] = React.useState(null);
+    const [fileData, setFileData] = React.useState(null);
+    const fileInputRef = React.useRef(null);
+
+    if (!isOpen) return null;
+
+    const handleFile = (file) => {
+        if (file && (file.type === 'application/json' || file.name.endsWith('.json'))) {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                try {
+                    const json = JSON.parse(e.target.result);
+                    setSelectedFile(file.name);
+                    setFileData(json);
+                } catch (error) {
+                    alert('Invalid JSON file. Please check the format.');
+                }
+            };
+            reader.readAsText(file);
+        } else {
+            alert('Please upload a valid JSON file (.json extension).');
+        }
+    };
+
+    const handleDrop = (e) => {
+        e.preventDefault();
+        setDragOver(false);
+        const file = e.dataTransfer.files[0];
+        handleFile(file);
+    };
+
+    const handleDragOver = (e) => {
+        e.preventDefault();
+        setDragOver(true);
+    };
+
+    const handleDragLeave = () => {
+        setDragOver(false);
+    };
+
+    const handleFileSelect = (e) => {
+        const file = e.target.files[0];
+        handleFile(file);
+    };
+
+    const handleImportConfirm = () => {
+        if (fileData) {
+            onImport(fileData, importMode);
+            setSelectedFile(null);
+            setFileData(null);
+            setImportMode('append');
+            onClose();
+        }
+    };
+
+    const handleCancel = () => {
+        setSelectedFile(null);
+        setFileData(null);
+        setImportMode('append');
+        onClose();
+    };
+
+    return (
+        <div className="modal-overlay" onClick={handleCancel}>
+            <div className="modal" onClick={(e) => e.stopPropagation()}>
+                <div className="modal-header">
+                    <h3 className="modal-title">Import Progress</h3>
+                    <button className="modal-close" onClick={handleCancel}>
+                        <i className="fas fa-times"></i>
+                    </button>
+                </div>
+                <div className="modal-body">
+                    {!selectedFile ? (
+                        <>
+                            <div
+                                className={`file-upload-area ${dragOver ? 'dragover' : ''}`}
+                                onDrop={handleDrop}
+                                onDragOver={handleDragOver}
+                                onDragLeave={handleDragLeave}
+                                onClick={() => fileInputRef.current?.click()}
+                            >
+                                <div className="upload-icon">
+                                    <i className="fas fa-file-import"></i>
+                                </div>
+                                <div className="upload-text">Drop your exported JSON file here</div>
+                                <div className="upload-hint">or click to browse</div>
+                                <input
+                                    ref={fileInputRef}
+                                    type="file"
+                                    accept=".json"
+                                    style={{ display: 'none' }}
+                                    onChange={handleFileSelect}
+                                />
+                            </div>
+                            <div style={{ marginTop: '1rem', padding: '0.75rem', background: 'var(--bg-card)', borderRadius: 'var(--radius-md)', fontSize: '0.875rem', color: 'var(--text-muted)' }}>
+                                <i className="fas fa-info-circle" style={{ marginRight: '0.5rem' }}></i>
+                                Only exported JSON files from this app are accepted
+                            </div>
+                        </>
+                    ) : (
+                        <>
+                            <div style={{ padding: '1rem', background: 'var(--bg-card)', borderRadius: 'var(--radius-md)', marginBottom: '1rem' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
+                                    <i className="fas fa-file-alt" style={{ color: 'var(--primary)' }}></i>
+                                    <span style={{ fontWeight: '500' }}>{selectedFile}</span>
+                                </div>
+                                <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>
+                                    File loaded successfully. Choose import mode below.
+                                </div>
+                            </div>
+
+                            <div style={{ marginBottom: '1rem' }}>
+                                <label style={{ display: 'block', marginBottom: '0.75rem', fontWeight: '500', fontSize: '0.875rem' }}>
+                                    Import Mode:
+                                </label>
+                                
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                                    <label 
+                                        style={{ 
+                                            display: 'flex', 
+                                            alignItems: 'flex-start', 
+                                            gap: '0.75rem', 
+                                            padding: '1rem', 
+                                            background: importMode === 'append' ? 'rgba(99, 102, 241, 0.1)' : 'var(--bg-card)', 
+                                            border: `2px solid ${importMode === 'append' ? 'var(--primary)' : 'var(--border)'}`,
+                                            borderRadius: 'var(--radius-md)',
+                                            cursor: 'pointer',
+                                            transition: 'all 0.2s ease'
+                                        }}
+                                    >
+                                        <input
+                                            type="radio"
+                                            name="importMode"
+                                            value="append"
+                                            checked={importMode === 'append'}
+                                            onChange={(e) => setImportMode(e.target.value)}
+                                            style={{ marginTop: '0.25rem' }}
+                                        />
+                                        <div style={{ flex: 1 }}>
+                                            <div style={{ fontWeight: '500', marginBottom: '0.25rem' }}>
+                                                <i className="fas fa-plus-circle" style={{ marginRight: '0.5rem', color: 'var(--success)' }}></i>
+                                                Append (Add to Existing)
+                                            </div>
+                                            <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>
+                                                Keep existing phases and add new ones. If same phase exists, it will be overwritten.
+                                            </div>
+                                        </div>
+                                    </label>
+
+                                    <label 
+                                        style={{ 
+                                            display: 'flex', 
+                                            alignItems: 'flex-start', 
+                                            gap: '0.75rem', 
+                                            padding: '1rem', 
+                                            background: importMode === 'overwrite' ? 'rgba(99, 102, 241, 0.1)' : 'var(--bg-card)', 
+                                            border: `2px solid ${importMode === 'overwrite' ? 'var(--primary)' : 'var(--border)'}`,
+                                            borderRadius: 'var(--radius-md)',
+                                            cursor: 'pointer',
+                                            transition: 'all 0.2s ease'
+                                        }}
+                                    >
+                                        <input
+                                            type="radio"
+                                            name="importMode"
+                                            value="overwrite"
+                                            checked={importMode === 'overwrite'}
+                                            onChange={(e) => setImportMode(e.target.value)}
+                                            style={{ marginTop: '0.25rem' }}
+                                        />
+                                        <div style={{ flex: 1 }}>
+                                            <div style={{ fontWeight: '500', marginBottom: '0.25rem' }}>
+                                                <i className="fas fa-sync-alt" style={{ marginRight: '0.5rem', color: 'var(--warning)' }}></i>
+                                                Overwrite (Replace All)
+                                            </div>
+                                            <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>
+                                                Delete all existing phases and replace with imported data.
+                                            </div>
+                                        </div>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div style={{ padding: '0.75rem', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-md)', fontSize: '0.875rem', color: 'var(--text-muted)', borderLeft: '3px solid var(--primary)' }}>
+                                <i className="fas fa-info-circle" style={{ marginRight: '0.5rem' }}></i>
+                                <strong>Tip:</strong> In Append mode, if a phase with the same name already exists, it will be replaced with the imported version.
+                            </div>
+                        </>
+                    )}
+                </div>
+                {selectedFile && (
+                    <div className="modal-footer">
+                        <button 
+                            className="btn btn-secondary" 
+                            onClick={handleCancel}
+                        >
+                            Cancel
+                        </button>
+                        <button 
+                            className="btn btn-primary" 
+                            onClick={handleImportConfirm}
+                        >
+                            <i className="fas fa-file-import"></i> Import
+                        </button>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+};
+
 const DeleteConfirmationModal = ({ isOpen, onClose, onConfirm }) => {
     if (!isOpen) return null;
 
@@ -707,6 +959,7 @@ const App = () => {
     const [phases, setPhases] = React.useState([]);
     const [activePhaseIndex, setActivePhaseIndex] = React.useState(null);
     const [showUploadModal, setShowUploadModal] = React.useState(false);
+    const [showImportModal, setShowImportModal] = React.useState(false);
     const [showDeleteModal, setShowDeleteModal] = React.useState(false);
     const [searchTerm, setSearchTerm] = React.useState('');
     const [toasts, setToasts] = React.useState([]);
@@ -850,6 +1103,71 @@ const App = () => {
         if (phases.length > 0) {
             StorageService.exportProgress(phases);
             addToast('Progress exported successfully', 'success');
+        }
+    };
+
+    const handleImport = (importData, mode = 'append') => {
+        try {
+            const importedPhases = StorageService.importProgress(importData);
+            
+            // Reconstruct phases from imported data
+            const loadedPhases = importedPhases.map(phaseData => {
+                const root = buildTree(phaseData.data);
+                if (phaseData.completionMap) {
+                    StorageService.applyCompletionMap(root, phaseData.completionMap);
+                }
+                return { data: phaseData.data, root };
+            });
+
+            let finalPhases = [];
+            let message = '';
+
+            if (mode === 'overwrite') {
+                // Replace all existing phases with imported ones
+                finalPhases = loadedPhases;
+                message = `Replaced all phases with ${loadedPhases.length} imported phase${loadedPhases.length !== 1 ? 's' : ''}`;
+            } else {
+                // Append mode with collision handling
+                finalPhases = [...phases];
+                let addedCount = 0;
+                let replacedCount = 0;
+
+                loadedPhases.forEach(importedPhase => {
+                    // Check if phase with same name already exists
+                    const existingIndex = finalPhases.findIndex(
+                        p => p.data.phase === importedPhase.data.phase
+                    );
+
+                    if (existingIndex !== -1) {
+                        // Replace existing phase with imported one
+                        finalPhases[existingIndex] = importedPhase;
+                        replacedCount++;
+                    } else {
+                        // Add new phase
+                        finalPhases.push(importedPhase);
+                        addedCount++;
+                    }
+                });
+
+                if (replacedCount > 0 && addedCount > 0) {
+                    message = `Added ${addedCount} new phase${addedCount !== 1 ? 's' : ''} and replaced ${replacedCount} existing phase${replacedCount !== 1 ? 's' : ''}`;
+                } else if (replacedCount > 0) {
+                    message = `Replaced ${replacedCount} existing phase${replacedCount !== 1 ? 's' : ''}`;
+                } else {
+                    message = `Added ${addedCount} new phase${addedCount !== 1 ? 's' : ''}`;
+                }
+            }
+
+            // Set phases and update active index
+            setPhases(finalPhases);
+            if (finalPhases.length > 0 && (activePhaseIndex === null || mode === 'overwrite')) {
+                setActivePhaseIndex(0);
+            }
+            
+            addToast(message, 'success');
+        } catch (error) {
+            console.error('Import failed:', error);
+            addToast(error.message || 'Failed to import progress', 'error');
         }
     };
 
@@ -1038,6 +1356,13 @@ const App = () => {
                                     >
                                         <i className="fas fa-upload"></i> Upload JSON
                                     </button>
+                                    <button
+                                        className="btn btn-secondary"
+                                        onClick={() => setShowImportModal(true)}
+                                        title="Import progress from exported file"
+                                    >
+                                        <i className="fas fa-file-import"></i> Import
+                                    </button>
                                     {phases.length > 0 && (
                                         <>
                                             <button
@@ -1083,12 +1408,20 @@ const App = () => {
                         <p className="empty-description">
                             Upload a JSON roadmap to start tracking your learning progress.
                         </p>
-                        <button
-                            className="btn btn-primary"
-                            onClick={() => setShowUploadModal(true)}
-                        >
-                            <i className="fas fa-upload"></i> Upload Your First Roadmap
-                        </button>
+                        <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center', flexWrap: 'wrap' }}>
+                            <button
+                                className="btn btn-primary"
+                                onClick={() => setShowUploadModal(true)}
+                            >
+                                <i className="fas fa-upload"></i> Upload Your First Roadmap
+                            </button>
+                            <button
+                                className="btn btn-secondary"
+                                onClick={() => setShowImportModal(true)}
+                            >
+                                <i className="fas fa-file-import"></i> Import Progress
+                            </button>
+                        </div>
                     </div>
                 ) : (
                     <div className="dashboard">
@@ -1243,6 +1576,12 @@ const App = () => {
                 isOpen={showUploadModal}
                 onClose={() => setShowUploadModal(false)}
                 onUpload={handleUpload}
+            />
+
+            <ImportModal
+                isOpen={showImportModal}
+                onClose={() => setShowImportModal(false)}
+                onImport={handleImport}
             />
 
             <DeleteConfirmationModal
