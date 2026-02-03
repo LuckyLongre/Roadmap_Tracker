@@ -494,6 +494,7 @@ const PhaseListItem = ({ phase, index, isActive, onClick, onDelete }) => {
                      phase.root.getCompletionState() === 'partial' ? 'In Progress' : 'Not Started'}
                 </div>
             </div>
+                                {/*
             <button
                 className="phase-delete"
                 onClick={(e) => {
@@ -504,6 +505,7 @@ const PhaseListItem = ({ phase, index, isActive, onClick, onDelete }) => {
             >
                 <i className="fas fa-trash"></i>
             </button>
+            */}
         </div>
     );
 };
