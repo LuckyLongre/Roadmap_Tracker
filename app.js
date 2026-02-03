@@ -13,6 +13,48 @@ const detectNodeType = (node, level) => {
     return 'detail';
 };
 
+// ============= COPY UTILITY FUNCTIONS =============
+const hasNestedChildren = (node) => {
+    return node.children.some(child => child.children.length > 0);
+};
+
+const formatCopyContent = (node) => {
+    if (node.children.length === 0) {
+        return node.title;
+    }
+    
+    if (hasNestedChildren(node)) {
+        return node.title;
+    }
+    
+    let content = `${node.title}:\n`;
+    node.children.forEach((child, index) => {
+        content += `${index + 1}. ${child.title}\n`;
+    });
+    return content.trim();
+};
+
+const copyToClipboard = async (text) => {
+    try {
+        await navigator.clipboard.writeText(text);
+        return true;
+    } catch (err) {
+        try {
+            const textArea = document.createElement('textarea');
+            textArea.value = text;
+            textArea.style.position = 'fixed';
+            textArea.style.left = '-999999px';
+            document.body.appendChild(textArea);
+            textArea.select();
+            const successful = document.execCommand('copy');
+            document.body.removeChild(textArea);
+            return successful;
+        } catch (e) {
+            return false;
+        }
+    }
+};
+
 // ============= TREE BUILDER =============
 class TreeNode {
     constructor(data, parentId = null, level = 0, index = 0) {
@@ -224,7 +266,9 @@ const StorageService = {
 };
 
 // ============= REACT COMPONENTS =============
-const TreeNodeComponent = ({ node, onToggle, onCheck, searchTerm }) => {
+const TreeNodeComponent = ({ node, onToggle, onCheck, searchTerm, onCopy }) => {
+    const [copyState, setCopyState] = React.useState('default');
+
     const handleToggle = (e) => {
         e.stopPropagation();
         if (onToggle && node.children.length > 0) {
@@ -237,6 +281,26 @@ const TreeNodeComponent = ({ node, onToggle, onCheck, searchTerm }) => {
         if (onCheck) onCheck(node);
     };
 
+    const handleCopy = async (e) => {
+        e.stopPropagation();
+        const content = formatCopyContent(node);
+        const success = await copyToClipboard(content);
+        
+        if (success) {
+            setCopyState('copied');
+            if (onCopy) {
+                onCopy('success', `Copied: ${node.title}`);
+            }
+            setTimeout(() => setCopyState('default'), 2000);
+        } else {
+            setCopyState('error');
+            if (onCopy) {
+                onCopy('error', 'Failed to copy to clipboard');
+            }
+            setTimeout(() => setCopyState('default'), 2000);
+        }
+    };
+
     const completionState = node.getCompletionState();
     const progress = node.calculateProgress();
     const shouldHighlight = searchTerm &&
@@ -246,6 +310,12 @@ const TreeNodeComponent = ({ node, onToggle, onCheck, searchTerm }) => {
         if (completionState === 'complete') return 'checked';
         if (completionState === 'partial') return 'partial';
         return '';
+    };
+
+    const getCopyIcon = () => {
+        if (copyState === 'copied') return 'fa-check';
+        if (copyState === 'error') return 'fa-exclamation';
+        return 'fa-copy';
     };
 
     return (
@@ -294,6 +364,13 @@ const TreeNodeComponent = ({ node, onToggle, onCheck, searchTerm }) => {
                     </div>
 
                     <div className="node-right">
+                        <button
+                            className={`node-copy-btn ${copyState === 'copied' ? 'copied' : ''}`}
+                            onClick={handleCopy}
+                            title={copyState === 'copied' ? 'Copied!' : 'Copy to clipboard'}
+                        >
+                            <i className={`fas ${getCopyIcon()}`}></i>
+                        </button>
                         {node.children.length > 0 && (
                             <>
                                 <div className="progress-bar-container">
@@ -319,6 +396,7 @@ const TreeNodeComponent = ({ node, onToggle, onCheck, searchTerm }) => {
                                 onToggle={onToggle}
                                 onCheck={onCheck}
                                 searchTerm={searchTerm}
+                                onCopy={onCopy}
                             />
                         ))}
                     </div>
@@ -640,7 +718,6 @@ const App = () => {
     const [controlsCollapsed, setControlsCollapsed] = React.useState(false);
     const [showScrollTop, setShowScrollTop] = React.useState(false);
 
-    // Load saved progress on mount
     React.useEffect(() => {
         const savedData = StorageService.loadProgress();
         if (savedData && savedData.length > 0) {
@@ -656,7 +733,6 @@ const App = () => {
         }
     }, []);
 
-    // Handle scroll to show/hide scroll-to-top button
     React.useEffect(() => {
         const handleScroll = () => {
             const scrollY = window.scrollY || document.documentElement.scrollTop;
@@ -680,7 +756,6 @@ const App = () => {
         };
     }, [phases, activePhaseIndex]);
 
-    // Save progress whenever phases change
     React.useEffect(() => {
         if (phases.length > 0) {
             StorageService.saveProgress(phases);
@@ -718,7 +793,6 @@ const App = () => {
         }
     };
 
-    // ✅ FIXED: Parent-child checkbox logic
     const setNodeAndChildren = (node, value) => {
         node.completed = value;
         node.children.forEach(child => setNodeAndChildren(child, value));
@@ -747,6 +821,10 @@ const App = () => {
     const handleToggleNode = (node, expanded) => {
         node.expanded = expanded;
         setPhases([...phases]);
+    };
+
+    const handleCopyNode = (type, message) => {
+        addToast(message, type);
     };
 
     const handleDeletePhase = (index) => {
@@ -853,7 +931,6 @@ const App = () => {
 
     const activePhase = activePhaseIndex !== null ? phases[activePhaseIndex] : null;
 
-    // ✅ FIXED: Overall progress calculation
     const getAllNodes = (node) => {
         let nodes = [node];
         node.children.forEach(child => {
@@ -880,7 +957,6 @@ const App = () => {
 
     const progress = calculateOverallProgress();
 
-    // ✅ FIXED: Stats
     const calculateStats = () => {
         if (phases.length === 0) return { total: 0, completed: 0 };
 
@@ -901,7 +977,6 @@ const App = () => {
     const totalNodes = stats.total;
     const completedNodes = stats.completed;
 
-    // Search functionality
     const getFilteredNodes = () => {
         if (!activePhase || !searchTerm) {
             return activePhase ? activePhase.root.children : [];
@@ -1002,29 +1077,26 @@ const App = () => {
                 {phases.length === 0 ? (
                     <div className="empty-state">
                         <div className="empty-icon">
-                            <i className="fas fa-file-upload"></i>
+                            <i className="fas fa-road"></i>
                         </div>
-                        <h2 className="empty-title">No Learning Path Loaded</h2>
+                        <h2 className="empty-title">No Learning Paths Yet</h2>
                         <p className="empty-description">
-                            Upload a JSON file containing your learning path to get started tracking your progress.
+                            Upload a JSON roadmap to start tracking your learning progress.
                         </p>
                         <button
                             className="btn btn-primary"
                             onClick={() => setShowUploadModal(true)}
                         >
-                            <i className="fas fa-upload"></i> Upload Learning Path
+                            <i className="fas fa-upload"></i> Upload Your First Roadmap
                         </button>
                     </div>
                 ) : (
                     <div className="dashboard">
-                        {/* Sidebar */}
                         <div className="sidebar">
-                            {/* Progress Overview */}
                             <div className={`sidebar-card ${sidebarCollapsed.progress ? 'collapsed' : ''}`}>
                                 <div className="sidebar-header">
                                     <h3 className="sidebar-title">
-                                        <i className="fas fa-chart-line"></i>
-                                        Progress
+                                        <i className="fas fa-chart-pie"></i> Progress
                                     </h3>
                                     <button
                                         className="toggle-btn"
@@ -1035,15 +1107,10 @@ const App = () => {
                                 </div>
                                 <div className="sidebar-content">
                                     <ProgressCircle progress={progress} />
-
                                     <div className="stats-grid">
                                         <div className="stat-item">
                                             <div className="stat-value">{completedNodes}</div>
                                             <div className="stat-label">Completed</div>
-                                        </div>
-                                        <div className="stat-item">
-                                            <div className="stat-value">{totalNodes - completedNodes}</div>
-                                            <div className="stat-label">Remaining</div>
                                         </div>
                                         <div className="stat-item">
                                             <div className="stat-value">{totalNodes}</div>
@@ -1057,12 +1124,10 @@ const App = () => {
                                 </div>
                             </div>
 
-                            {/* Phases List */}
                             <div className={`sidebar-card ${sidebarCollapsed.phases ? 'collapsed' : ''}`}>
                                 <div className="sidebar-header">
                                     <h3 className="sidebar-title">
-                                        <i className="fas fa-list"></i>
-                                        Phases
+                                        <i className="fas fa-list"></i> Phases
                                     </h3>
                                     <button
                                         className="toggle-btn"
@@ -1088,7 +1153,6 @@ const App = () => {
                             </div>
                         </div>
 
-                        {/* Main Content Area */}
                         <div className="main-content">
                             <div className={`content-header ${controlsCollapsed ? 'collapsed' : ''}`}>
                                 <div className="content-header-main">
@@ -1107,18 +1171,16 @@ const App = () => {
                                 </div>
 
                                 {!controlsCollapsed && (
-                                    <>
-                                        <div className="search-box">
-                                            <i className="fas fa-search search-icon"></i>
-                                            <input
-                                                type="text"
-                                                className="search-input"
-                                                placeholder="Search..."
-                                                value={searchTerm}
-                                                onChange={(e) => setSearchTerm(e.target.value)}
-                                            />
-                                        </div>
-                                    </>
+                                    <div className="search-box">
+                                        <i className="fas fa-search search-icon"></i>
+                                        <input
+                                            type="text"
+                                            className="search-input"
+                                            placeholder="Search topics..."
+                                            value={searchTerm}
+                                            onChange={(e) => setSearchTerm(e.target.value)}
+                                        />
+                                    </div>
                                 )}
                             </div>
 
@@ -1126,33 +1188,17 @@ const App = () => {
                                 {!controlsCollapsed && (
                                     <div className="content-header">
                                         <div className="btn-group">
-                                            <button
-                                                className="btn btn-secondary"
-                                                onClick={expandAll}
-                                            >
-                                                <i className="fas fa-expand-alt"></i>
-                                                Expand All
+                                            <button className="btn btn-secondary" onClick={expandAll}>
+                                                <i className="fas fa-expand-alt"></i> Expand All
                                             </button>
-                                            <button
-                                                className="btn btn-secondary"
-                                                onClick={collapseAll}
-                                            >
-                                                <i className="fas fa-compress-alt"></i>
-                                                Collapse All
+                                            <button className="btn btn-secondary" onClick={collapseAll}>
+                                                <i className="fas fa-compress-alt"></i> Collapse All
                                             </button>
-                                            <button
-                                                className="btn btn-success"
-                                                onClick={markAllComplete}
-                                            >
-                                                <i className="fas fa-check-double"></i>
-                                                Complete All
+                                            <button className="btn btn-success" onClick={markAllComplete}>
+                                                <i className="fas fa-check-double"></i> Complete All
                                             </button>
-                                            <button
-                                                className="btn btn-secondary"
-                                                onClick={markAllIncomplete}
-                                            >
-                                                <i className="fas fa-undo"></i>
-                                                Reset All
+                                            <button className="btn btn-secondary" onClick={markAllIncomplete}>
+                                                <i className="fas fa-undo"></i> Reset All
                                             </button>
                                         </div>
                                     </div>
@@ -1175,6 +1221,7 @@ const App = () => {
                                                 onToggle={handleToggleNode}
                                                 onCheck={handleCheckNode}
                                                 searchTerm={searchTerm}
+                                                onCopy={handleCopyNode}
                                             />
                                         ))
                                     ) : (
@@ -1192,7 +1239,6 @@ const App = () => {
                 )}
             </main>
 
-            {/* Modals */}
             <UploadModal
                 isOpen={showUploadModal}
                 onClose={() => setShowUploadModal(false)}
@@ -1205,7 +1251,6 @@ const App = () => {
                 onConfirm={handleDeleteAllProgress}
             />
 
-            {/* Toast Notifications */}
             <div className="toast-container">
                 {toasts.map(toast => (
                     <Toast
@@ -1217,7 +1262,6 @@ const App = () => {
                 ))}
             </div>
 
-            {/* Scroll to Top Button */}
             {showScrollTop && (
                 <button
                     className="scroll-to-top"
@@ -1231,5 +1275,4 @@ const App = () => {
     );
 };
 
-// Render the app
 ReactDOM.render(<App />, document.getElementById('root'));
