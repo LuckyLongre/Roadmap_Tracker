@@ -393,7 +393,6 @@ const TreeNodeComponent = ({ node, onToggle, onCheck, searchTerm, onCopy }) => {
                                 </span>
                                 {node.children.length > 0 && (
                                     <span className="node-badge">
-                                        <i className="fas fa-sitemap"></i>
                                         {node.children.length} items
                                     </span>
                                 )}
@@ -494,9 +493,6 @@ const PhaseListItem = ({ phase, index, isActive, onClick, onDelete }) => {
                      phase.root.getCompletionState() === 'partial' ? 'In Progress' : 'Not Started'}
                 </div>
             </div>
- {/* 
-            
-            
             <button
                 className="phase-delete"
                 onClick={(e) => {
@@ -507,7 +503,6 @@ const PhaseListItem = ({ phase, index, isActive, onClick, onDelete }) => {
             >
                 <i className="fas fa-trash"></i>
             </button>
-            */}
         </div>
     );
 };
@@ -608,8 +603,8 @@ const ImportModal = ({ isOpen, onClose, onImport }) => {
             reader.onload = (e) => {
                 try {
                     const json = JSON.parse(e.target.result);
-                    setSelectedFile(file.name);
                     setFileData(json);
+                    setSelectedFile(file.name);
                 } catch (error) {
                     alert('Invalid JSON file. Please check the format.');
                 }
@@ -844,6 +839,35 @@ const DeleteConfirmationModal = ({ isOpen, onClose, onConfirm }) => {
     );
 };
 
+// NEW: Small Confirmation Modal for individual operations
+const SmallConfirmModal = ({ isOpen, onClose, onConfirm, title, message, confirmText, confirmIcon }) => {
+    if (!isOpen) return null;
+
+    return (
+        <div className="modal-overlay" onClick={onClose}>
+            <div className="modal small-modal" onClick={(e) => e.stopPropagation()}>
+                <div className="modal-header">
+                    <h3 className="modal-title">{title}</h3>
+                    <button className="modal-close" onClick={onClose}>
+                        <i className="fas fa-times"></i>
+                    </button>
+                </div>
+                <div className="modal-body">
+                    <p style={{ color: 'var(--text-secondary)', margin: '0' }}>{message}</p>
+                </div>
+                <div className="modal-footer">
+                    <button className="btn btn-secondary" onClick={onClose}>
+                        Cancel
+                    </button>
+                    <button className="btn btn-primary" onClick={onConfirm}>
+                        {confirmIcon && <i className={`fas ${confirmIcon}`}></i>} {confirmText}
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
 const Toast = ({ message, type, onClose }) => {
     React.useEffect(() => {
         const timer = setTimeout(onClose, 3000);
@@ -974,6 +998,12 @@ const App = () => {
     const [headerCollapsed, setHeaderCollapsed] = React.useState(false);
     const [controlsCollapsed, setControlsCollapsed] = React.useState(false);
     const [showScrollTop, setShowScrollTop] = React.useState(false);
+    
+    // NEW: States for small confirmation modals
+    const [showCompleteAllModal, setShowCompleteAllModal] = React.useState(false);
+    const [showResetAllModal, setShowResetAllModal] = React.useState(false);
+    const [showDeletePhaseModal, setShowDeletePhaseModal] = React.useState(false);
+    const [phaseToDelete, setPhaseToDelete] = React.useState(null);
 
     React.useEffect(() => {
         const savedData = StorageService.loadProgress();
@@ -1084,15 +1114,25 @@ const App = () => {
         addToast(message, type);
     };
 
+    // NEW: Modified to show confirmation modal
     const handleDeletePhase = (index) => {
-        const newPhases = phases.filter((_, i) => i !== index);
-        setPhases(newPhases);
-        if (activePhaseIndex === index) {
-            setActivePhaseIndex(newPhases.length > 0 ? 0 : null);
-        } else if (activePhaseIndex > index) {
-            setActivePhaseIndex(activePhaseIndex - 1);
+        setPhaseToDelete(index);
+        setShowDeletePhaseModal(true);
+    };
+
+    const confirmDeletePhase = () => {
+        if (phaseToDelete !== null) {
+            const newPhases = phases.filter((_, i) => i !== phaseToDelete);
+            setPhases(newPhases);
+            if (activePhaseIndex === phaseToDelete) {
+                setActivePhaseIndex(newPhases.length > 0 ? 0 : null);
+            } else if (activePhaseIndex > phaseToDelete) {
+                setActivePhaseIndex(activePhaseIndex - 1);
+            }
+            addToast('Phase deleted successfully', 'success');
+            setShowDeletePhaseModal(false);
+            setPhaseToDelete(null);
         }
-        addToast('Phase deleted successfully', 'success');
     };
 
     const handleDeleteAllProgress = () => {
@@ -1197,20 +1237,32 @@ const App = () => {
         }
     };
 
+    // NEW: Modified to show confirmation modal
     const markAllComplete = () => {
+        setShowCompleteAllModal(true);
+    };
+
+    const confirmMarkAllComplete = () => {
         if (activePhase) {
             setNodeAndChildren(activePhase.root, true);
             setPhases([...phases]);
             addToast('All items marked as complete', 'success');
         }
+        setShowCompleteAllModal(false);
     };
 
+    // NEW: Modified to show confirmation modal
     const markAllIncomplete = () => {
+        setShowResetAllModal(true);
+    };
+
+    const confirmMarkAllIncomplete = () => {
         if (activePhase) {
             setNodeAndChildren(activePhase.root, false);
             setPhases([...phases]);
             addToast('All items reset', 'success');
         }
+        setShowResetAllModal(false);
     };
 
     const toggleSidebarSection = (section) => {
@@ -1592,6 +1644,39 @@ const App = () => {
                 isOpen={showDeleteModal}
                 onClose={() => setShowDeleteModal(false)}
                 onConfirm={handleDeleteAllProgress}
+            />
+
+            <SmallConfirmModal
+                isOpen={showCompleteAllModal}
+                onClose={() => setShowCompleteAllModal(false)}
+                onConfirm={confirmMarkAllComplete}
+                title="Complete All Items?"
+                message="This will mark all items in the current phase as complete."
+                confirmText="Complete All"
+                confirmIcon="fa-check-double"
+            />
+
+            <SmallConfirmModal
+                isOpen={showResetAllModal}
+                onClose={() => setShowResetAllModal(false)}
+                onConfirm={confirmMarkAllIncomplete}
+                title="Reset All Progress?"
+                message="This will reset all items in the current phase to incomplete."
+                confirmText="Reset All"
+                confirmIcon="fa-undo"
+            />
+
+            <SmallConfirmModal
+                isOpen={showDeletePhaseModal}
+                onClose={() => {
+                    setShowDeletePhaseModal(false);
+                    setPhaseToDelete(null);
+                }}
+                onConfirm={confirmDeletePhase}
+                title="Delete Phase?"
+                message="Are you sure you want to delete this phase? This action cannot be undone."
+                confirmText="Delete"
+                confirmIcon="fa-trash"
             />
 
             <div className="toast-container">
