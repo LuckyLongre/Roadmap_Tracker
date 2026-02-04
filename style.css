@@ -883,6 +883,11 @@ body {
     overflow-y: auto;
 }
 
+/* Small Modal for individual confirmations */
+.modal.small-modal {
+    max-width: 400px;
+}
+
 .modal-header {
     padding: var(--space-lg);
     border-bottom: 1px solid var(--border);
