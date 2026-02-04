@@ -839,7 +839,7 @@ const DeleteConfirmationModal = ({ isOpen, onClose, onConfirm }) => {
     );
 };
 
-// NEW: Small Confirmation Modal for individual operations
+// Small Confirmation Modal for individual operations
 const SmallConfirmModal = ({ isOpen, onClose, onConfirm, title, message, confirmText, confirmIcon }) => {
     if (!isOpen) return null;
 
@@ -886,38 +886,57 @@ const Toast = ({ message, type, onClose }) => {
     );
 };
 
-const SearchResults = ({ searchTerm, activePhase, onNodeClick }) => {
-    if (!searchTerm || !activePhase) return null;
+// NEW: Global Search Results Component - searches across ALL phases
+const GlobalSearchResults = ({ searchTerm, phases, onNodeClick, onClose, onSearchChange }) => {
+    const searchInputRef = React.useRef(null);
+
+    React.useEffect(() => {
+        if (searchInputRef.current) {
+            searchInputRef.current.focus();
+        }
+    }, []);
+
+    if (!phases || phases.length === 0) return null;
 
     const term = searchTerm.toLowerCase();
-    const getAllNodes = (node) => {
-        let nodes = [node];
-        node.children.forEach(child => {
-            nodes = nodes.concat(getAllNodes(child));
+    
+    // Search across ALL phases
+    const getAllMatchingNodes = () => {
+        const results = [];
+        
+        phases.forEach((phase, phaseIndex) => {
+            const getAllNodes = (node) => {
+                let nodes = [node];
+                node.children.forEach(child => {
+                    nodes = nodes.concat(getAllNodes(child));
+                });
+                return nodes;
+            };
+
+            const allNodes = getAllNodes(phase.root);
+            const matchingNodes = allNodes.filter(node =>
+                node.title.toLowerCase().includes(term) && node.id !== phase.root.id
+            );
+
+            matchingNodes.forEach(node => {
+                results.push({
+                    node,
+                    phaseIndex,
+                    phaseName: phase.data.phase,
+                    phaseTitle: phase.data.title
+                });
+            });
         });
-        return nodes;
+
+        return results;
     };
 
-    const allNodes = getAllNodes(activePhase.root);
-    const matchingNodes = allNodes.filter(node =>
-        node.title.toLowerCase().includes(term) && node.id !== activePhase.root.id
-    );
+    const matchingResults = searchTerm ? getAllMatchingNodes() : [];
 
-    if (matchingNodes.length === 0) {
-        return (
-            <div className="search-results">
-                <div className="search-results-header">
-                    <i className="fas fa-search"></i>
-                    <span>No results found for "{searchTerm}"</span>
-                </div>
-            </div>
-        );
-    }
-
-    const getNodePath = (node) => {
+    const getNodePath = (node, rootId) => {
         const path = [];
         let current = node.parent;
-        while (current && current.id !== activePhase.root.id) {
+        while (current && current.id !== rootId) {
             path.unshift(current.title);
             current = current.parent;
         }
@@ -925,58 +944,101 @@ const SearchResults = ({ searchTerm, activePhase, onNodeClick }) => {
     };
 
     return (
-        <div className="search-results">
-            <div className="search-results-header">
-                <i className="fas fa-search"></i>
-                <span>{matchingNodes.length} result{matchingNodes.length !== 1 ? 's' : ''} found</span>
-            </div>
-            <div className="search-results-list">
-                {matchingNodes.map((node) => {
-                    const path = getNodePath(node);
-                    const progress = node.calculateProgress();
+        <div className="global-search-overlay" onClick={onClose}>
+            <div className="global-search-container" onClick={(e) => e.stopPropagation()}>
+                <div className="global-search-header">
+                    <div className="global-search-input-wrapper">
+                        <i className="fas fa-search search-icon"></i>
+                        <input
+                            ref={searchInputRef}
+                            type="text"
+                            className="global-search-input"
+                            placeholder="Search across all phases..."
+                            value={searchTerm}
+                            onChange={(e) => onSearchChange(e.target.value)}
+                            autoFocus
+                        />
+                        <button className="global-search-close" onClick={onClose}>
+                            <i className="fas fa-times"></i>
+                        </button>
+                    </div>
+                </div>
 
-                    return (
-                        <div
-                            key={node.id}
-                            className="search-result-item"
-                            onClick={() => onNodeClick(node)}
-                        >
-                            <div className="search-result-content">
-                                <div className="search-result-title">
-                                    <i className={`fas fa-${
-                                        node.type === 'phase' ? 'layer-group' :
-                                        node.type === 'section' ? 'folder' :
-                                        node.type === 'topic' ? 'book' :
-                                        node.type === 'subtopic' ? 'bookmark' :
-                                        node.type === 'concept' ? 'lightbulb' : 'circle'
-                                    }`}></i>
-                                    {node.title}
-                                </div>
-                                {path.length > 0 && (
-                                    <div className="search-result-path">
-                                        {path.join(' > ')}
-                                    </div>
-                                )}
-                                <div className="search-result-meta">
-                                    <span className="search-result-badge">{node.type}</span>
-                                    {node.children.length > 0 && (
-                                        <>
-                                            <span className="search-result-badge">
-                                                {node.children.length} items
-                                            </span>
-                                            <span className="search-result-badge">
-                                                {progress.toFixed(0)}% complete
-                                            </span>
-                                        </>
-                                    )}
-                                </div>
-                            </div>
-                            <div className="search-result-action">
-                                <i className="fas fa-arrow-right"></i>
-                            </div>
+                <div className="global-search-results">
+                    {!searchTerm ? (
+                        <div className="search-no-results">
+                            <i className="fas fa-search"></i>
+                            <p>Start typing to search across all phases...</p>
                         </div>
-                    );
-                })}
+                    ) : matchingResults.length === 0 ? (
+                        <div className="search-no-results">
+                            <i className="fas fa-search"></i>
+                            <p>No results found for "{searchTerm}"</p>
+                        </div>
+                    ) : (
+                        <>
+                            <div className="search-results-count">
+                                {matchingResults.length} result{matchingResults.length !== 1 ? 's' : ''} found across {new Set(matchingResults.map(r => r.phaseIndex)).size} phase{new Set(matchingResults.map(r => r.phaseIndex)).size !== 1 ? 's' : ''}
+                            </div>
+                            <div className="global-search-results-list">
+                                {matchingResults.map((result, idx) => {
+                                    const { node, phaseIndex, phaseName, phaseTitle } = result;
+                                    const path = getNodePath(node, phases[phaseIndex].root.id);
+                                    const progress = node.calculateProgress();
+
+                                    return (
+                                        <div
+                                            key={`${phaseIndex}-${node.id}-${idx}`}
+                                            className="global-search-result-item"
+                                            onClick={() => {
+                                                onNodeClick(node, phaseIndex);
+                                                onClose();
+                                            }}
+                                        >
+                                            <div className="search-result-phase-badge">
+                                                <i className="fas fa-layer-group"></i>
+                                                {phaseName}
+                                            </div>
+                                            <div className="search-result-content">
+                                                <div className="search-result-title">
+                                                    <i className={`fas fa-${
+                                                        node.type === 'phase' ? 'layer-group' :
+                                                        node.type === 'section' ? 'folder' :
+                                                        node.type === 'topic' ? 'book' :
+                                                        node.type === 'subtopic' ? 'bookmark' :
+                                                        node.type === 'concept' ? 'lightbulb' : 'circle'
+                                                    }`}></i>
+                                                    {node.title}
+                                                </div>
+                                                {path.length > 0 && (
+                                                    <div className="search-result-path">
+                                                        {path.join(' > ')}
+                                                    </div>
+                                                )}
+                                                <div className="search-result-meta">
+                                                    <span className="search-result-badge">{node.type}</span>
+                                                    {node.children.length > 0 && (
+                                                        <>
+                                                            <span className="search-result-badge">
+                                                                {node.children.length} items
+                                                            </span>
+                                                            <span className="search-result-badge">
+                                                                {progress.toFixed(0)}% complete
+                                                            </span>
+                                                        </>
+                                                    )}
+                                                </div>
+                                            </div>
+                                            <div className="search-result-action">
+                                                <i className="fas fa-arrow-right"></i>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </>
+                    )}
+                </div>
             </div>
         </div>
     );
@@ -990,6 +1052,7 @@ const App = () => {
     const [showImportModal, setShowImportModal] = React.useState(false);
     const [showDeleteModal, setShowDeleteModal] = React.useState(false);
     const [searchTerm, setSearchTerm] = React.useState('');
+    const [showGlobalSearch, setShowGlobalSearch] = React.useState(false);
     const [toasts, setToasts] = React.useState([]);
     const [sidebarCollapsed, setSidebarCollapsed] = React.useState({
         progress: false,
@@ -999,7 +1062,7 @@ const App = () => {
     const [controlsCollapsed, setControlsCollapsed] = React.useState(false);
     const [showScrollTop, setShowScrollTop] = React.useState(false);
     
-    // NEW: States for small confirmation modals
+    // States for small confirmation modals
     const [showCompleteAllModal, setShowCompleteAllModal] = React.useState(false);
     const [showResetAllModal, setShowResetAllModal] = React.useState(false);
     const [showDeletePhaseModal, setShowDeletePhaseModal] = React.useState(false);
@@ -1114,7 +1177,6 @@ const App = () => {
         addToast(message, type);
     };
 
-    // NEW: Modified to show confirmation modal
     const handleDeletePhase = (index) => {
         setPhaseToDelete(index);
         setShowDeletePhaseModal(true);
@@ -1154,7 +1216,6 @@ const App = () => {
         try {
             const importedPhases = StorageService.importProgress(importData);
             
-            // Reconstruct phases from imported data
             const loadedPhases = importedPhases.map(phaseData => {
                 const root = buildTree(phaseData.data);
                 if (phaseData.completionMap) {
@@ -1167,27 +1228,22 @@ const App = () => {
             let message = '';
 
             if (mode === 'overwrite') {
-                // Replace all existing phases with imported ones
                 finalPhases = loadedPhases;
                 message = `Replaced all phases with ${loadedPhases.length} imported phase${loadedPhases.length !== 1 ? 's' : ''}`;
             } else {
-                // Append mode with collision handling
                 finalPhases = [...phases];
                 let addedCount = 0;
                 let replacedCount = 0;
 
                 loadedPhases.forEach(importedPhase => {
-                    // Check if phase with same name already exists
                     const existingIndex = finalPhases.findIndex(
                         p => p.data.phase === importedPhase.data.phase
                     );
 
                     if (existingIndex !== -1) {
-                        // Replace existing phase with imported one
                         finalPhases[existingIndex] = importedPhase;
                         replacedCount++;
                     } else {
-                        // Add new phase
                         finalPhases.push(importedPhase);
                         addedCount++;
                     }
@@ -1202,7 +1258,6 @@ const App = () => {
                 }
             }
 
-            // Set phases and update active index
             setPhases(finalPhases);
             if (finalPhases.length > 0 && (activePhaseIndex === null || mode === 'overwrite')) {
                 setActivePhaseIndex(0);
@@ -1237,7 +1292,6 @@ const App = () => {
         }
     };
 
-    // NEW: Modified to show confirmation modal
     const markAllComplete = () => {
         setShowCompleteAllModal(true);
     };
@@ -1251,7 +1305,6 @@ const App = () => {
         setShowCompleteAllModal(false);
     };
 
-    // NEW: Modified to show confirmation modal
     const markAllIncomplete = () => {
         setShowResetAllModal(true);
     };
@@ -1272,7 +1325,12 @@ const App = () => {
         }));
     };
 
-    const scrollToNode = (node) => {
+    // NEW: Global search node click handler
+    const handleGlobalSearchNodeClick = (node, phaseIndex) => {
+        // Switch to the phase containing the node
+        setActivePhaseIndex(phaseIndex);
+        
+        // Expand parents to show the node
         let current = node.parent;
         while (current) {
             current.expanded = true;
@@ -1282,6 +1340,7 @@ const App = () => {
         node.highlighted = true;
         setPhases([...phases]);
 
+        // Scroll to node after a short delay
         setTimeout(() => {
             const element = document.querySelector(`[data-node-id="${node.id}"]`);
             if (element) {
@@ -1293,6 +1352,16 @@ const App = () => {
             node.highlighted = false;
             setPhases([...phases]);
         }, 2000);
+    };
+
+    const handleOpenGlobalSearch = () => {
+        setShowGlobalSearch(true);
+        setSearchTerm('');
+    };
+
+    const handleCloseGlobalSearch = () => {
+        setShowGlobalSearch(false);
+        setSearchTerm('');
     };
 
     const scrollToTop = () => {
@@ -1351,29 +1420,7 @@ const App = () => {
     const totalNodes = stats.total;
     const completedNodes = stats.completed;
 
-    const getFilteredNodes = () => {
-        if (!activePhase || !searchTerm) {
-            return activePhase ? activePhase.root.children : [];
-        }
-
-        const term = searchTerm.toLowerCase();
-        const allNodes = getAllNodes(activePhase.root);
-        const matchingNodes = allNodes.filter(node =>
-            node.title.toLowerCase().includes(term)
-        );
-
-        matchingNodes.forEach(node => {
-            let current = node.parent;
-            while (current) {
-                current.expanded = true;
-                current = current.parent;
-            }
-        });
-
-        return activePhase.root.children;
-    };
-
-    const filteredChildren = getFilteredNodes();
+    const filteredChildren = activePhase ? activePhase.root.children : [];
 
     return (
         <div className="app-container">
@@ -1405,7 +1452,7 @@ const App = () => {
                                     <span className="logo-text">LearnPath</span>
                                 </div>
 
-                                <div className="action-buttons">
+                                <div className="action-buttons">                         
                                     <button
                                         className="btn btn-primary"
                                         onClick={() => setShowUploadModal(true)}
@@ -1558,19 +1605,6 @@ const App = () => {
                                         <i className={`fas fa-chevron-${controlsCollapsed ? 'down' : 'up'}`}></i>
                                     </button>
                                 </div>
-
-                                {!controlsCollapsed && (
-                                    <div className="search-box">
-                                        <i className="fas fa-search search-icon"></i>
-                                        <input
-                                            type="text"
-                                            className="search-input"
-                                            placeholder="Search topics..."
-                                            value={searchTerm}
-                                            onChange={(e) => setSearchTerm(e.target.value)}
-                                        />
-                                    </div>
-                                )}
                             </div>
 
                             <div className="tree-container">
@@ -1593,14 +1627,6 @@ const App = () => {
                                     </div>
                                 )}
 
-                                {searchTerm && (
-                                    <SearchResults
-                                        searchTerm={searchTerm}
-                                        activePhase={activePhase}
-                                        onNodeClick={scrollToNode}
-                                    />
-                                )}
-
                                 <div className="tree-viewport">
                                     {filteredChildren.length > 0 ? (
                                         filteredChildren.map((node) => (
@@ -1609,7 +1635,7 @@ const App = () => {
                                                 node={node}
                                                 onToggle={handleToggleNode}
                                                 onCheck={handleCheckNode}
-                                                searchTerm={searchTerm}
+                                                searchTerm=""
                                                 onCopy={handleCopyNode}
                                             />
                                         ))
@@ -1679,6 +1705,16 @@ const App = () => {
                 confirmIcon="fa-trash"
             />
 
+            {showGlobalSearch && (
+                <GlobalSearchResults
+                    searchTerm={searchTerm}
+                    phases={phases}
+                    onNodeClick={handleGlobalSearchNodeClick}
+                    onClose={handleCloseGlobalSearch}
+                    onSearchChange={setSearchTerm}
+                />
+            )}
+
             <div className="toast-container">
                 {toasts.map(toast => (
                     <Toast
@@ -1697,6 +1733,17 @@ const App = () => {
                     title="Scroll to top"
                 >
                     <i className="fas fa-arrow-up"></i>
+                </button>
+            )}
+
+            {/* Global Search Trigger Button - Fixed Position */}
+            {phases.length > 0 && (
+                <button
+                    className="global-search-trigger"
+                    onClick={handleOpenGlobalSearch}
+                    title="Search across all phases"
+                >
+                    <i className="fas fa-search"></i>
                 </button>
             )}
         </div>
