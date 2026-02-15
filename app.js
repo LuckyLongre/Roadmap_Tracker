@@ -8,9 +8,7 @@ const detectNodeType = (node, level) => {
     if (node.sections) return 'section-container';
     if (node.topics) return 'section';
     if (node.subtopics) return 'topic';
-    if (node.concepts) return 'subtopic';
-    if (node.details || node.practicalExamples || node.technicalConcepts) return 'concept';
-    return 'detail';
+    return 'subtopic';
 };
 
 // ============= COPY UTILITY FUNCTIONS =============
@@ -19,6 +17,15 @@ const hasNestedChildren = (node) => {
 };
 
 const formatCopyContent = (node) => {
+    // Check if it's a leaf node with details
+    if (node.children.length === 0 && node.data.details && node.data.details.length > 0) {
+        let content = `${node.title}:\n`;
+        node.data.details.forEach((detail, index) => {
+            content += `${index + 1}. ${detail}\n`;
+        });
+        return content.trim();
+    }
+    
     if (node.children.length === 0) {
         return node.title;
     }
@@ -58,10 +65,10 @@ const copyToClipboard = async (text) => {
 // ============= TREE BUILDER =============
 class TreeNode {
     constructor(data, parentId = null, level = 0, index = 0) {
-        this.id = generateId(parentId, index);
+        this.id = data.id || generateId(parentId, index);
         this.originalId = data.id || this.id;
         this.type = detectNodeType(data, level);
-        this.title = data.title || data.name || data.type || data.protocol || 'Untitled';
+        this.title = data.title || data.name || 'Untitled';
         this.data = data;
         this.level = level;
         this.children = [];
@@ -119,12 +126,26 @@ class TreeNode {
         this.highlighted = false;
         this.children.forEach(child => child.resetHighlight());
     }
+
+    hasOptionalData() {
+        const data = this.data;
+        return (
+            (data.learningObjectives && data.learningObjectives.length > 0) ||
+            (data.learningOutcomes && data.learningOutcomes.length > 0) ||
+            (data.practicalAssignments && data.practicalAssignments.length > 0) ||
+            (data.assessmentIdeas && data.assessmentIdeas.length > 0) ||
+            (data.details && data.details.length > 0) ||
+            (data.duration) ||
+            (data.description)
+        );
+    }
 }
 
 const buildTree = (data) => {
     const root = new TreeNode(data, null, 0, 0);
 
     const processNode = (node, parentNode, level) => {
+        // Process sections
         if (node.sections && Array.isArray(node.sections)) {
             node.sections.forEach((section, idx) => {
                 const sectionNode = new TreeNode(section, parentNode.id, level + 1, idx);
@@ -133,6 +154,7 @@ const buildTree = (data) => {
             });
         }
 
+        // Process topics
         if (node.topics && Array.isArray(node.topics)) {
             node.topics.forEach((topic, idx) => {
                 const topicNode = new TreeNode(topic, parentNode.id, level + 1, idx);
@@ -141,6 +163,7 @@ const buildTree = (data) => {
             });
         }
 
+        // Process subtopics (recursive)
         if (node.subtopics && Array.isArray(node.subtopics)) {
             node.subtopics.forEach((subtopic, idx) => {
                 const subtopicNode = new TreeNode(subtopic, parentNode.id, level + 1, idx);
@@ -148,35 +171,6 @@ const buildTree = (data) => {
                 processNode(subtopic, subtopicNode, level + 1);
             });
         }
-
-        if (node.concepts && Array.isArray(node.concepts)) {
-            node.concepts.forEach((concept, idx) => {
-                const conceptNode = new TreeNode(concept, parentNode.id, level + 1, idx);
-                parentNode.addChild(conceptNode);
-                processNode(concept, conceptNode, level + 1);
-            });
-        }
-
-        const detailKeys = [
-            'details', 'practicalExamples', 'technicalConcepts', 'performanceFactors',
-            'characteristics', 'useCases', 'importance', 'features', 'types', 'performanceImpact'
-        ];
-
-        detailKeys.forEach(key => {
-            if (node[key] && Array.isArray(node[key])) {
-                node[key].forEach((detail, idx) => {
-                    const detailData = typeof detail === 'string'
-                        ? { title: detail, type: key }
-                        : { ...detail, type: key };
-                    const detailNode = new TreeNode(detailData, parentNode.id, level + 1, idx);
-                    parentNode.addChild(detailNode);
-
-                    if (typeof detail === 'object' && detail !== null) {
-                        processNode(detail, detailNode, level + 1);
-                    }
-                });
-            }
-        });
     };
 
     processNode(data, root, 0);
@@ -185,7 +179,7 @@ const buildTree = (data) => {
 
 // ============= STORAGE SERVICE =============
 const StorageService = {
-    STORAGE_KEY: 'learning_tracker_data_v3',
+    STORAGE_KEY: 'learning_tracker_data_v4',
 
     saveProgress(phases) {
         try {
@@ -224,54 +218,46 @@ const StorageService = {
         return map;
     },
 
-    applyCompletionMap(node, completionMap) {
-        const traverse = (n) => {
-            if (completionMap[n.id]) {
-                n.completed = completionMap[n.id].completed;
-                n.expanded = completionMap[n.id].expanded;
+    applyCompletionMap(node, map) {
+        const apply = (n) => {
+            if (map[n.id]) {
+                n.completed = map[n.id].completed;
+                n.expanded = map[n.id].expanded;
             }
-            n.children.forEach(traverse);
+            n.children.forEach(apply);
         };
-        traverse(node);
+        apply(node);
     },
 
     exportProgress(phases) {
-        // Export complete phase data along with progress
         const exportData = {
-            exportVersion: '1.0',
+            version: '4.0',
             exportDate: new Date().toISOString(),
-            appName: 'LearnPath - Visual Learning Tracker',
-            phases: phases.map((phase, index) => ({
-                index: index,
-                data: phase.data, // Complete original phase data
-                completionMap: this.serializeCompletionMap(phase.root),
-                metadata: {
-                    totalNodes: this.countNodes(phase.root),
-                    completedNodes: this.countCompletedNodes(phase.root),
-                    progressPercentage: phase.root.calculateProgress()
-                }
+            phases: phases.map(phase => ({
+                data: phase.data,
+                completionMap: this.serializeCompletionMap(phase.root)
             }))
         };
-
-        const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `learnpath-export-${new Date().toISOString().split('T')[0]}.json`;
-        a.click();
-        URL.revokeObjectURL(url);
-        return true;
+        return exportData;
     },
 
-    importProgress(importData) {
-        // Validate import data structure
-        if (!importData.exportVersion || importData.exportVersion !== '1.0') {
-            throw new Error('Invalid export file format');
+    validateImport(importData) {
+        if (!importData || typeof importData !== 'object') {
+            throw new Error('Invalid import data');
         }
-        
+
         if (!importData.phases || !Array.isArray(importData.phases)) {
-            throw new Error('Invalid export file structure');
+            throw new Error('Import data must contain phases array');
         }
+
+        importData.phases.forEach((phase, index) => {
+            if (!phase.data) {
+                throw new Error(`Phase ${index + 1} is missing data`);
+            }
+            if (!phase.data.phase || !phase.data.title) {
+                throw new Error(`Phase ${index + 1} is missing required fields`);
+            }
+        });
 
         return importData.phases;
     },
@@ -303,8 +289,256 @@ const StorageService = {
     }
 };
 
+// ============= INFO MODAL COMPONENT =============
+const InfoModal = ({ isOpen, onClose, node }) => {
+    if (!isOpen || !node) return null;
+
+    const data = node.data;
+    const hasLearningObjectives = data.learningObjectives && data.learningObjectives.length > 0;
+    const hasLearningOutcomes = data.learningOutcomes && data.learningOutcomes.length > 0;
+    const hasPracticalAssignments = data.practicalAssignments && data.practicalAssignments.length > 0;
+    const hasAssessmentIdeas = data.assessmentIdeas && data.assessmentIdeas.length > 0;
+    const hasDetails = data.details && data.details.length > 0;
+    const hasDuration = data.duration;
+    const hasDescription = data.description;
+
+    return (
+        <div className="info-modal-overlay" onClick={onClose}>
+            <div className="info-modal" onClick={(e) => e.stopPropagation()}>
+                <div className="info-modal-header">
+                    <h3 className="info-modal-title">
+                        <i className={`fas fa-${
+                            node.type === 'phase' ? 'layer-group' :
+                            node.type === 'section' ? 'folder' :
+                            node.type === 'topic' ? 'book' :
+                            'bookmark'
+                        }`}></i>
+                        {node.title}
+                    </h3>
+                    <button className="info-modal-close" onClick={onClose}>
+                        <i className="fas fa-times"></i>
+                    </button>
+                </div>
+                <div className="info-modal-body">
+                    {hasDuration && (
+                        <div className="info-section">
+                            <div className="info-section-title">
+                                <i className="fas fa-clock"></i>
+                                Duration
+                            </div>
+                            <div className="info-text">{data.duration}</div>
+                        </div>
+                    )}
+
+                    {hasDescription && (
+                        <div className="info-section">
+                            <div className="info-section-title">
+                                <i className="fas fa-info-circle"></i>
+                                Description
+                            </div>
+                            <div className="info-text">{data.description}</div>
+                        </div>
+                    )}
+
+                    {hasDetails && (
+                        <div className="info-section">
+                            <div className="info-section-title">
+                                <i className="fas fa-list-ul"></i>
+                                Details
+                            </div>
+                            <ul className="info-list">
+                                {data.details.map((detail, idx) => (
+                                    <li key={idx} className="info-list-item">{detail}</li>
+                                ))}
+                            </ul>
+                        </div>
+                    )}
+
+                    {hasLearningObjectives && (
+                        <div className="info-section">
+                            <div className="info-section-title">
+                                <i className="fas fa-bullseye"></i>
+                                Learning Objectives
+                            </div>
+                            <ul className="info-list">
+                                {data.learningObjectives.map((objective, idx) => (
+                                    <li key={idx} className="info-list-item">{objective}</li>
+                                ))}
+                            </ul>
+                        </div>
+                    )}
+
+                    {hasLearningOutcomes && (
+                        <div className="info-section">
+                            <div className="info-section-title">
+                                <i className="fas fa-trophy"></i>
+                                Learning Outcomes
+                            </div>
+                            <ul className="info-list">
+                                {data.learningOutcomes.map((outcome, idx) => (
+                                    <li key={idx} className="info-list-item">{outcome}</li>
+                                ))}
+                            </ul>
+                        </div>
+                    )}
+
+                    {hasPracticalAssignments && (
+                        <div className="info-section">
+                            <div className="info-section-title">
+                                <i className="fas fa-tasks"></i>
+                                Practical Assignments
+                            </div>
+                            <ul className="info-list">
+                                {data.practicalAssignments.map((assignment, idx) => (
+                                    <li key={idx} className="info-list-item">{assignment}</li>
+                                ))}
+                            </ul>
+                        </div>
+                    )}
+
+                    {hasAssessmentIdeas && (
+                        <div className="info-section">
+                            <div className="info-section-title">
+                                <i className="fas fa-clipboard-check"></i>
+                                Assessment Ideas
+                            </div>
+                            <ul className="info-list">
+                                {data.assessmentIdeas.map((idea, idx) => (
+                                    <li key={idx} className="info-list-item">{idea}</li>
+                                ))}
+                            </ul>
+                        </div>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+};
+
+// ============= EDIT MODAL COMPONENT =============
+const EditModal = ({ isOpen, onClose, node, onSave }) => {
+    const [editedTitle, setEditedTitle] = React.useState('');
+    const [showConfirmation, setShowConfirmation] = React.useState(false);
+
+    React.useEffect(() => {
+        if (node) {
+            setEditedTitle(node.title);
+        }
+    }, [node]);
+
+    if (!isOpen || !node) return null;
+
+    const handleSave = () => {
+        setShowConfirmation(true);
+    };
+
+    const handleConfirmSave = () => {
+        if (editedTitle.trim() && editedTitle !== node.title) {
+            onSave(node, editedTitle.trim());
+            setShowConfirmation(false);
+            onClose();
+        } else if (editedTitle.trim() === node.title) {
+            setShowConfirmation(false);
+            onClose();
+        }
+    };
+
+    const handleCancel = () => {
+        setEditedTitle(node.title);
+        setShowConfirmation(false);
+        onClose();
+    };
+
+    const hasChanged = editedTitle.trim() !== node.title;
+
+    return (
+        <>
+            <div className="edit-modal-overlay" onClick={handleCancel}>
+                <div className="edit-modal" onClick={(e) => e.stopPropagation()}>
+                    <div className="edit-modal-header">
+                        <h3 className="edit-modal-title">
+                            <i className="fas fa-edit"></i>
+                            Edit Node
+                        </h3>
+                        <button className="edit-modal-close" onClick={handleCancel}>
+                            <i className="fas fa-times"></i>
+                        </button>
+                    </div>
+                    <div className="edit-modal-body">
+                        <div className="edit-form-group">
+                            <label className="edit-form-label">
+                                Node Title
+                            </label>
+                            <input
+                                type="text"
+                                className="edit-form-input"
+                                value={editedTitle}
+                                onChange={(e) => setEditedTitle(e.target.value)}
+                                placeholder="Enter node title"
+                                autoFocus
+                            />
+                            <div className="edit-original-value">
+                                <span className="edit-original-label">Original:</span>
+                                {node.title}
+                            </div>
+                        </div>
+                    </div>
+                    <div className="edit-modal-footer">
+                        <button className="btn btn-secondary" onClick={handleCancel}>
+                            <i className="fas fa-times"></i> Cancel
+                        </button>
+                        <button 
+                            className="btn btn-primary" 
+                            onClick={handleSave}
+                            disabled={!editedTitle.trim() || !hasChanged}
+                        >
+                            <i className="fas fa-save"></i> Save Changes
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            {showConfirmation && (
+                <div className="modal-overlay" onClick={() => setShowConfirmation(false)} style={{ zIndex: 4000 }}>
+                    <div className="modal small-modal" onClick={(e) => e.stopPropagation()}>
+                        <div className="modal-header">
+                            <h3 className="modal-title">Confirm Edit</h3>
+                            <button className="modal-close" onClick={() => setShowConfirmation(false)}>
+                                <i className="fas fa-times"></i>
+                            </button>
+                        </div>
+                        <div className="modal-body">
+                            <p style={{ color: 'var(--text-secondary)', marginBottom: '1rem' }}>
+                                Are you sure you want to update this node?
+                            </p>
+                            <div style={{ background: 'var(--bg-card)', padding: 'var(--space-md)', borderRadius: 'var(--radius-md)' }}>
+                                <div style={{ marginBottom: 'var(--space-sm)' }}>
+                                    <strong style={{ color: 'var(--text-muted)' }}>From:</strong>
+                                    <div style={{ color: 'var(--text-secondary)', marginTop: 'var(--space-xs)' }}>{node.title}</div>
+                                </div>
+                                <div>
+                                    <strong style={{ color: 'var(--text-muted)' }}>To:</strong>
+                                    <div style={{ color: 'var(--primary)', marginTop: 'var(--space-xs)' }}>{editedTitle.trim()}</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div className="modal-footer">
+                            <button className="btn btn-secondary" onClick={() => setShowConfirmation(false)}>
+                                Cancel
+                            </button>
+                            <button className="btn btn-primary" onClick={handleConfirmSave}>
+                                <i className="fas fa-check"></i> Confirm
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </>
+    );
+};
+
 // ============= REACT COMPONENTS =============
-const TreeNodeComponent = ({ node, onToggle, onCheck, searchTerm, onCopy }) => {
+const TreeNodeComponent = ({ node, onToggle, onCheck, searchTerm, onCopy, onShowInfo, onEdit }) => {
     const [copyState, setCopyState] = React.useState('default');
 
     const handleToggle = (e) => {
@@ -339,6 +573,20 @@ const TreeNodeComponent = ({ node, onToggle, onCheck, searchTerm, onCopy }) => {
         }
     };
 
+    const handleShowInfo = (e) => {
+        e.stopPropagation();
+        if (onShowInfo) {
+            onShowInfo(node);
+        }
+    };
+
+    const handleEdit = (e) => {
+        e.stopPropagation();
+        if (onEdit) {
+            onEdit(node);
+        }
+    };
+
     const completionState = node.getCompletionState();
     const progress = node.calculateProgress();
     const shouldHighlight = searchTerm &&
@@ -355,6 +603,8 @@ const TreeNodeComponent = ({ node, onToggle, onCheck, searchTerm, onCopy }) => {
         if (copyState === 'error') return 'fa-exclamation';
         return 'fa-copy';
     };
+
+    const hasInfo = node.hasOptionalData();
 
     return (
         <div className="tree-node" data-node-id={node.id}>
@@ -386,8 +636,7 @@ const TreeNodeComponent = ({ node, onToggle, onCheck, searchTerm, onCopy }) => {
                                         node.type === 'phase' ? 'layer-group' :
                                         node.type === 'section' ? 'folder' :
                                         node.type === 'topic' ? 'book' :
-                                        node.type === 'subtopic' ? 'bookmark' :
-                                        node.type === 'concept' ? 'lightbulb' : 'circle'
+                                        'bookmark'
                                     }`}></i>
                                     {node.type}
                                 </span>
@@ -401,13 +650,31 @@ const TreeNodeComponent = ({ node, onToggle, onCheck, searchTerm, onCopy }) => {
                     </div>
 
                     <div className="node-right">
-                        <button
-                            className={`node-copy-btn ${copyState === 'copied' ? 'copied' : ''}`}
-                            onClick={handleCopy}
-                            title={copyState === 'copied' ? 'Copied!' : 'Copy to clipboard'}
-                        >
-                            <i className={`fas ${getCopyIcon()}`}></i>
-                        </button>
+                        <div className="node-action-buttons">
+                            <button
+                                className="node-action-btn node-edit-icon"
+                                onClick={handleEdit}
+                                title="Edit node"
+                            >
+                                <i className="fas fa-edit"></i>
+                            </button>
+                            {hasInfo && (
+                                <button
+                                    className="node-action-btn node-info-icon"
+                                    onClick={handleShowInfo}
+                                    title="View details"
+                                >
+                                    <i className="fas fa-info-circle"></i>
+                                </button>
+                            )}
+                            <button
+                                className={`node-copy-btn ${copyState === 'copied' ? 'copied' : ''}`}
+                                onClick={handleCopy}
+                                title={copyState === 'copied' ? 'Copied!' : 'Copy to clipboard'}
+                            >
+                                <i className={`fas ${getCopyIcon()}`}></i>
+                            </button>
+                        </div>
                         {node.children.length > 0 && (
                             <>
                                 <div className="progress-bar-container">
@@ -434,6 +701,8 @@ const TreeNodeComponent = ({ node, onToggle, onCheck, searchTerm, onCopy }) => {
                                 onCheck={onCheck}
                                 searchTerm={searchTerm}
                                 onCopy={onCopy}
+                                onShowInfo={onShowInfo}
+                                onEdit={onEdit}
                             />
                         ))}
                     </div>
@@ -590,7 +859,7 @@ const UploadModal = ({ isOpen, onClose, onUpload }) => {
 
 const ImportModal = ({ isOpen, onClose, onImport }) => {
     const [dragOver, setDragOver] = React.useState(false);
-    const [importMode, setImportMode] = React.useState('append'); // 'append' or 'overwrite'
+    const [importMode, setImportMode] = React.useState('append');
     const [selectedFile, setSelectedFile] = React.useState(null);
     const [fileData, setFileData] = React.useState(null);
     const fileInputRef = React.useRef(null);
@@ -697,102 +966,43 @@ const ImportModal = ({ isOpen, onClose, onImport }) => {
                                     <i className="fas fa-file-alt" style={{ color: 'var(--primary)' }}></i>
                                     <span style={{ fontWeight: '500' }}>{selectedFile}</span>
                                 </div>
-                                <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>
-                                    File loaded successfully. Choose import mode below.
-                                </div>
                             </div>
-
                             <div style={{ marginBottom: '1rem' }}>
-                                <label style={{ display: 'block', marginBottom: '0.75rem', fontWeight: '500', fontSize: '0.875rem' }}>
+                                <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '500' }}>
                                     Import Mode:
                                 </label>
-                                
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                                    <label 
-                                        style={{ 
-                                            display: 'flex', 
-                                            alignItems: 'flex-start', 
-                                            gap: '0.75rem', 
-                                            padding: '1rem', 
-                                            background: importMode === 'append' ? 'rgba(99, 102, 241, 0.1)' : 'var(--bg-card)', 
-                                            border: `2px solid ${importMode === 'append' ? 'var(--primary)' : 'var(--border)'}`,
-                                            borderRadius: 'var(--radius-md)',
-                                            cursor: 'pointer',
-                                            transition: 'all 0.2s ease'
-                                        }}
-                                    >
+                                <div style={{ display: 'flex', gap: '1rem' }}>
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
                                         <input
                                             type="radio"
                                             name="importMode"
                                             value="append"
                                             checked={importMode === 'append'}
                                             onChange={(e) => setImportMode(e.target.value)}
-                                            style={{ marginTop: '0.25rem' }}
                                         />
-                                        <div style={{ flex: 1 }}>
-                                            <div style={{ fontWeight: '500', marginBottom: '0.25rem' }}>
-                                                <i className="fas fa-plus-circle" style={{ marginRight: '0.5rem', color: 'var(--success)' }}></i>
-                                                Append (Add to Existing)
-                                            </div>
-                                            <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>
-                                                Keep existing phases and add new ones. If same phase exists, it will be overwritten.
-                                            </div>
-                                        </div>
+                                        <span>Append to existing</span>
                                     </label>
-
-                                    <label 
-                                        style={{ 
-                                            display: 'flex', 
-                                            alignItems: 'flex-start', 
-                                            gap: '0.75rem', 
-                                            padding: '1rem', 
-                                            background: importMode === 'overwrite' ? 'rgba(99, 102, 241, 0.1)' : 'var(--bg-card)', 
-                                            border: `2px solid ${importMode === 'overwrite' ? 'var(--primary)' : 'var(--border)'}`,
-                                            borderRadius: 'var(--radius-md)',
-                                            cursor: 'pointer',
-                                            transition: 'all 0.2s ease'
-                                        }}
-                                    >
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
                                         <input
                                             type="radio"
                                             name="importMode"
                                             value="overwrite"
                                             checked={importMode === 'overwrite'}
                                             onChange={(e) => setImportMode(e.target.value)}
-                                            style={{ marginTop: '0.25rem' }}
                                         />
-                                        <div style={{ flex: 1 }}>
-                                            <div style={{ fontWeight: '500', marginBottom: '0.25rem' }}>
-                                                <i className="fas fa-sync-alt" style={{ marginRight: '0.5rem', color: 'var(--warning)' }}></i>
-                                                Overwrite (Replace All)
-                                            </div>
-                                            <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>
-                                                Delete all existing phases and replace with imported data.
-                                            </div>
-                                        </div>
+                                        <span>Overwrite existing</span>
                                     </label>
                                 </div>
-                            </div>
-
-                            <div style={{ padding: '0.75rem', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-md)', fontSize: '0.875rem', color: 'var(--text-muted)', borderLeft: '3px solid var(--primary)' }}>
-                                <i className="fas fa-info-circle" style={{ marginRight: '0.5rem' }}></i>
-                                <strong>Tip:</strong> In Append mode, if a phase with the same name already exists, it will be replaced with the imported version.
                             </div>
                         </>
                     )}
                 </div>
                 {selectedFile && (
                     <div className="modal-footer">
-                        <button 
-                            className="btn btn-secondary" 
-                            onClick={handleCancel}
-                        >
+                        <button className="btn btn-secondary" onClick={handleCancel}>
                             Cancel
                         </button>
-                        <button 
-                            className="btn btn-primary" 
-                            onClick={handleImportConfirm}
-                        >
+                        <button className="btn btn-primary" onClick={handleImportConfirm}>
                             <i className="fas fa-file-import"></i> Import
                         </button>
                     </div>
@@ -839,7 +1049,6 @@ const DeleteConfirmationModal = ({ isOpen, onClose, onConfirm }) => {
     );
 };
 
-// Small Confirmation Modal for individual operations
 const SmallConfirmModal = ({ isOpen, onClose, onConfirm, title, message, confirmText, confirmIcon }) => {
     if (!isOpen) return null;
 
@@ -886,7 +1095,6 @@ const Toast = ({ message, type, onClose }) => {
     );
 };
 
-// NEW: Global Search Results Component - searches across ALL phases
 const GlobalSearchResults = ({ searchTerm, phases, onNodeClick, onClose, onSearchChange }) => {
     const searchInputRef = React.useRef(null);
 
@@ -900,7 +1108,6 @@ const GlobalSearchResults = ({ searchTerm, phases, onNodeClick, onClose, onSearc
 
     const term = searchTerm.toLowerCase();
     
-    // Search across ALL phases
     const getAllMatchingNodes = () => {
         const results = [];
         
@@ -1005,8 +1212,7 @@ const GlobalSearchResults = ({ searchTerm, phases, onNodeClick, onClose, onSearc
                                                         node.type === 'phase' ? 'layer-group' :
                                                         node.type === 'section' ? 'folder' :
                                                         node.type === 'topic' ? 'book' :
-                                                        node.type === 'subtopic' ? 'bookmark' :
-                                                        node.type === 'concept' ? 'lightbulb' : 'circle'
+                                                        'bookmark'
                                                     }`}></i>
                                                     {node.title}
                                                 </div>
@@ -1061,8 +1267,11 @@ const App = () => {
     const [headerCollapsed, setHeaderCollapsed] = React.useState(false);
     const [controlsCollapsed, setControlsCollapsed] = React.useState(false);
     const [showScrollTop, setShowScrollTop] = React.useState(false);
+    const [showInfoModal, setShowInfoModal] = React.useState(false);
+    const [selectedInfoNode, setSelectedInfoNode] = React.useState(null);
+    const [showEditModal, setShowEditModal] = React.useState(false);
+    const [selectedEditNode, setSelectedEditNode] = React.useState(null);
     
-    // States for small confirmation modals
     const [showCompleteAllModal, setShowCompleteAllModal] = React.useState(false);
     const [showResetAllModal, setShowResetAllModal] = React.useState(false);
     const [showDeletePhaseModal, setShowDeletePhaseModal] = React.useState(false);
@@ -1177,6 +1386,23 @@ const App = () => {
         addToast(message, type);
     };
 
+    const handleShowInfo = (node) => {
+        setSelectedInfoNode(node);
+        setShowInfoModal(true);
+    };
+
+    const handleEdit = (node) => {
+        setSelectedEditNode(node);
+        setShowEditModal(true);
+    };
+
+    const handleSaveEdit = (node, newTitle) => {
+        node.title = newTitle;
+        node.data.title = newTitle;
+        setPhases([...phases]);
+        addToast('Node updated successfully', 'success');
+    };
+
     const handleDeletePhase = (index) => {
         setPhaseToDelete(index);
         setShowDeletePhaseModal(true);
@@ -1192,8 +1418,53 @@ const App = () => {
                 setActivePhaseIndex(activePhaseIndex - 1);
             }
             addToast('Phase deleted successfully', 'success');
-            setShowDeletePhaseModal(false);
-            setPhaseToDelete(null);
+        }
+        setShowDeletePhaseModal(false);
+        setPhaseToDelete(null);
+    };
+
+    const handleExportProgress = () => {
+        try {
+            const exportData = StorageService.exportProgress(phases);
+            const dataStr = JSON.stringify(exportData, null, 2);
+            const dataBlob = new Blob([dataStr], { type: 'application/json' });
+            const url = URL.createObjectURL(dataBlob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `learning-progress-${new Date().toISOString().split('T')[0]}.json`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+            addToast('Progress exported successfully', 'success');
+        } catch (error) {
+            console.error('Error exporting progress:', error);
+            addToast('Error exporting progress', 'error');
+        }
+    };
+
+    const handleImport = (data, mode) => {
+        try {
+            const validatedPhases = StorageService.validateImport(data);
+            const importedPhases = validatedPhases.map(phaseData => {
+                const root = buildTree(phaseData.data);
+                if (phaseData.completionMap) {
+                    StorageService.applyCompletionMap(root, phaseData.completionMap);
+                }
+                return { data: phaseData.data, root };
+            });
+
+            if (mode === 'overwrite') {
+                setPhases(importedPhases);
+                setActivePhaseIndex(importedPhases.length > 0 ? 0 : null);
+                addToast('Progress overwritten successfully', 'success');
+            } else {
+                setPhases(prev => [...prev, ...importedPhases]);
+                addToast(`${importedPhases.length} phase(s) imported`, 'success');
+            }
+        } catch (error) {
+            console.error('Import error:', error);
+            addToast(error.message || 'Error importing progress', 'error');
         }
     };
 
@@ -1205,91 +1476,24 @@ const App = () => {
         addToast('All progress deleted', 'success');
     };
 
-    const handleExportProgress = () => {
-        if (phases.length > 0) {
-            StorageService.exportProgress(phases);
-            addToast('Progress exported successfully', 'success');
-        }
-    };
-
-    const handleImport = (importData, mode = 'append') => {
-        try {
-            const importedPhases = StorageService.importProgress(importData);
-            
-            const loadedPhases = importedPhases.map(phaseData => {
-                const root = buildTree(phaseData.data);
-                if (phaseData.completionMap) {
-                    StorageService.applyCompletionMap(root, phaseData.completionMap);
-                }
-                return { data: phaseData.data, root };
-            });
-
-            let finalPhases = [];
-            let message = '';
-
-            if (mode === 'overwrite') {
-                finalPhases = loadedPhases;
-                message = `Replaced all phases with ${loadedPhases.length} imported phase${loadedPhases.length !== 1 ? 's' : ''}`;
-            } else {
-                finalPhases = [...phases];
-                let addedCount = 0;
-                let replacedCount = 0;
-
-                loadedPhases.forEach(importedPhase => {
-                    const existingIndex = finalPhases.findIndex(
-                        p => p.data.phase === importedPhase.data.phase
-                    );
-
-                    if (existingIndex !== -1) {
-                        finalPhases[existingIndex] = importedPhase;
-                        replacedCount++;
-                    } else {
-                        finalPhases.push(importedPhase);
-                        addedCount++;
-                    }
-                });
-
-                if (replacedCount > 0 && addedCount > 0) {
-                    message = `Added ${addedCount} new phase${addedCount !== 1 ? 's' : ''} and replaced ${replacedCount} existing phase${replacedCount !== 1 ? 's' : ''}`;
-                } else if (replacedCount > 0) {
-                    message = `Replaced ${replacedCount} existing phase${replacedCount !== 1 ? 's' : ''}`;
-                } else {
-                    message = `Added ${addedCount} new phase${addedCount !== 1 ? 's' : ''}`;
-                }
-            }
-
-            setPhases(finalPhases);
-            if (finalPhases.length > 0 && (activePhaseIndex === null || mode === 'overwrite')) {
-                setActivePhaseIndex(0);
-            }
-            
-            addToast(message, 'success');
-        } catch (error) {
-            console.error('Import failed:', error);
-            addToast(error.message || 'Failed to import progress', 'error');
-        }
-    };
-
     const expandAll = () => {
-        if (activePhase) {
-            const expandNode = (node) => {
-                node.expanded = true;
-                node.children.forEach(expandNode);
-            };
-            expandNode(activePhase.root);
-            setPhases([...phases]);
-        }
+        if (!phases[activePhaseIndex]) return;
+        const setExpanded = (node) => {
+            node.expanded = true;
+            node.children.forEach(setExpanded);
+        };
+        setExpanded(phases[activePhaseIndex].root);
+        setPhases([...phases]);
     };
 
     const collapseAll = () => {
-        if (activePhase) {
-            const collapseNode = (node) => {
-                node.expanded = false;
-                node.children.forEach(collapseNode);
-            };
-            collapseNode(activePhase.root);
-            setPhases([...phases]);
-        }
+        if (!phases[activePhaseIndex]) return;
+        const setCollapsed = (node) => {
+            node.expanded = false;
+            node.children.forEach(setCollapsed);
+        };
+        setCollapsed(phases[activePhaseIndex].root);
+        setPhases([...phases]);
     };
 
     const markAllComplete = () => {
@@ -1297,10 +1501,10 @@ const App = () => {
     };
 
     const confirmMarkAllComplete = () => {
-        if (activePhase) {
-            setNodeAndChildren(activePhase.root, true);
+        if (phases[activePhaseIndex]) {
+            setNodeAndChildren(phases[activePhaseIndex].root, true);
             setPhases([...phases]);
-            addToast('All items marked as complete', 'success');
+            addToast('All items marked complete', 'success');
         }
         setShowCompleteAllModal(false);
     };
@@ -1310,8 +1514,8 @@ const App = () => {
     };
 
     const confirmMarkAllIncomplete = () => {
-        if (activePhase) {
-            setNodeAndChildren(activePhase.root, false);
+        if (phases[activePhaseIndex]) {
+            setNodeAndChildren(phases[activePhaseIndex].root, false);
             setPhases([...phases]);
             addToast('All items reset', 'success');
         }
@@ -1325,12 +1529,9 @@ const App = () => {
         }));
     };
 
-    // NEW: Global search node click handler
     const handleGlobalSearchNodeClick = (node, phaseIndex) => {
-        // Switch to the phase containing the node
         setActivePhaseIndex(phaseIndex);
         
-        // Expand parents to show the node
         let current = node.parent;
         while (current) {
             current.expanded = true;
@@ -1340,7 +1541,6 @@ const App = () => {
         node.highlighted = true;
         setPhases([...phases]);
 
-        // Scroll to node after a short delay
         setTimeout(() => {
             const element = document.querySelector(`[data-node-id="${node.id}"]`);
             if (element) {
@@ -1637,6 +1837,8 @@ const App = () => {
                                                 onCheck={handleCheckNode}
                                                 searchTerm=""
                                                 onCopy={handleCopyNode}
+                                                onShowInfo={handleShowInfo}
+                                                onEdit={handleEdit}
                                             />
                                         ))
                                     ) : (
@@ -1705,6 +1907,25 @@ const App = () => {
                 confirmIcon="fa-trash"
             />
 
+            <InfoModal
+                isOpen={showInfoModal}
+                onClose={() => {
+                    setShowInfoModal(false);
+                    setSelectedInfoNode(null);
+                }}
+                node={selectedInfoNode}
+            />
+
+            <EditModal
+                isOpen={showEditModal}
+                onClose={() => {
+                    setShowEditModal(false);
+                    setSelectedEditNode(null);
+                }}
+                node={selectedEditNode}
+                onSave={handleSaveEdit}
+            />
+
             {showGlobalSearch && (
                 <GlobalSearchResults
                     searchTerm={searchTerm}
@@ -1736,7 +1957,6 @@ const App = () => {
                 </button>
             )}
 
-            {/* Global Search Trigger Button - Fixed Position */}
             {phases.length > 0 && (
                 <button
                     className="global-search-trigger"
