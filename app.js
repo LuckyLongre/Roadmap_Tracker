@@ -687,7 +687,7 @@ const ProgressCircle = ({ progress, size = 160 }) => {
     );
 };
 
-const PhaseListItem = ({ phase, index, isActive, onClick, onDelete, onRename }) => {
+const PhaseListItem = ({ phase, index, isActive, onClick, onDelete, onRename, onEdit }) => {
     const progress = phase.root.calculateProgress();
     return (
         <div className={`phase-item ${isActive ? 'active' : ''}`} onClick={() => onClick(index)}>
@@ -702,6 +702,14 @@ const PhaseListItem = ({ phase, index, isActive, onClick, onDelete, onRename }) 
                      phase.root.getCompletionState() === 'partial' ? 'In Progress' : 'Not Started'}
                 </div>
             </div>
+            <button
+                className="phase-delete"
+                style={{ color: 'var(--secondary)' }}
+                onClick={(e) => { e.stopPropagation(); onEdit(index); }}
+                title="Edit phase structure"
+            >
+                <i className="fas fa-edit"></i>
+            </button>
             <button
                 className="phase-delete"
                 style={{ color: 'var(--primary)' }}
@@ -1186,6 +1194,353 @@ const BuildPhaseModal = ({ isOpen, onClose, onCreate }) => {
     );
 };
 
+// ============= EDIT PHASE MODAL =============
+const EditPhaseModal = ({ isOpen, onClose, onSave, phase, phaseIndex }) => {
+    const idRef = React.useRef(9000);
+    const newId = () => `ep-${idRef.current++}`;
+
+    const [phaseName, setPhaseName]   = React.useState('');
+    const [phaseTitle, setPhaseTitle] = React.useState('');
+    const [sections, setSections]     = React.useState([]);
+
+    // Convert a phase's raw data object into the builder's internal node format
+    const dataToBuilderSections = (phaseData) => {
+        idRef.current = 9000;
+        const raw = phaseData.sections || [];
+        if (raw.length === 0) {
+            return [{ id: newId(), title: '', children: [] }];
+        }
+        return raw.map(section => ({
+            id: newId(),
+            title: section.title || '',
+            children: (section.topics || []).map(topic => ({
+                id: newId(),
+                title: topic.title || '',
+                children: (topic.subtopics || []).map(sub => ({
+                    id: newId(),
+                    title: sub.title || '',
+                    children: []
+                }))
+            }))
+        }));
+    };
+
+    // Populate from phase data every time the modal opens for a phase
+    React.useEffect(() => {
+        if (isOpen && phase) {
+            setPhaseName(phase.data.phase || '');
+            setPhaseTitle(phase.data.title || '');
+            setSections(dataToBuilderSections(phase.data));
+        }
+    }, [isOpen, phaseIndex]); // re-run when phaseIndex changes so different phases load correctly
+
+    if (!isOpen || phase == null) return null;
+
+    const makeNode = () => ({ id: newId(), title: '', children: [] });
+
+    // ---- Section operations ----
+    const addSection = () =>
+        setSections(prev => [...prev, makeNode()]);
+
+    const removeSection = (sid) =>
+        setSections(prev => prev.filter(s => s.id !== sid));
+
+    const updateSection = (sid, title) =>
+        setSections(prev => prev.map(s => s.id === sid ? { ...s, title } : s));
+
+    // ---- Topic operations ----
+    const addTopic = (sid) =>
+        setSections(prev => prev.map(s =>
+            s.id === sid ? { ...s, children: [...s.children, makeNode()] } : s
+        ));
+
+    const removeTopic = (sid, tid) =>
+        setSections(prev => prev.map(s =>
+            s.id === sid ? { ...s, children: s.children.filter(t => t.id !== tid) } : s
+        ));
+
+    const updateTopic = (sid, tid, title) =>
+        setSections(prev => prev.map(s =>
+            s.id === sid
+                ? { ...s, children: s.children.map(t => t.id === tid ? { ...t, title } : t) }
+                : s
+        ));
+
+    // ---- Subtopic operations ----
+    const addSubtopic = (sid, tid) =>
+        setSections(prev => prev.map(s =>
+            s.id === sid
+                ? { ...s, children: s.children.map(t =>
+                    t.id === tid
+                        ? { ...t, children: [...(t.children || []), makeNode()] }
+                        : t
+                  ) }
+                : s
+        ));
+
+    const removeSubtopic = (sid, tid, stid) =>
+        setSections(prev => prev.map(s =>
+            s.id === sid
+                ? { ...s, children: s.children.map(t =>
+                    t.id === tid
+                        ? { ...t, children: (t.children || []).filter(st => st.id !== stid) }
+                        : t
+                  ) }
+                : s
+        ));
+
+    const updateSubtopic = (sid, tid, stid, title) =>
+        setSections(prev => prev.map(s =>
+            s.id === sid
+                ? { ...s, children: s.children.map(t =>
+                    t.id === tid
+                        ? { ...t, children: (t.children || []).map(st =>
+                            st.id === stid ? { ...st, title } : st
+                          ) }
+                        : t
+                  ) }
+                : s
+        ));
+
+    const canSave = phaseName.trim() && sections.some(s => s.title.trim());
+
+    const handleSave = () => {
+        if (!canSave) return;
+        const phaseData = {
+            phase: phaseName.trim(),
+            title: phaseTitle.trim() || phaseName.trim(),
+            sections: sections
+                .filter(s => s.title.trim())
+                .map(s => ({
+                    title: s.title.trim(),
+                    topics: (s.children || [])
+                        .filter(t => t.title.trim())
+                        .map(t => ({
+                            title: t.title.trim(),
+                            subtopics: (t.children || [])
+                                .filter(st => st.title.trim())
+                                .map(st => ({ title: st.title.trim() }))
+                        }))
+                }))
+        };
+        onSave(phaseData, phaseIndex);
+        onClose();
+    };
+
+    return (
+        <div className="modal-overlay" onClick={onClose}>
+            <div className="modal build-phase-modal" onClick={e => e.stopPropagation()}>
+
+                {/* Header */}
+                <div className="modal-header">
+                    <h3 className="modal-title">
+                        <i className="fas fa-edit" style={{ marginRight: '0.5rem', color: 'var(--secondary)' }}></i>
+                        Edit Phase Structure
+                    </h3>
+                    <button className="modal-close" onClick={onClose}>
+                        <i className="fas fa-times"></i>
+                    </button>
+                </div>
+
+                {/* Scrollable body */}
+                <div className="modal-body build-phase-modal-body">
+
+                    {/* Phase name + description */}
+                    <div className="build-phase-info-row">
+                        <div>
+                            <label className="edit-form-label">
+                                Phase Name <span style={{ color: 'var(--error)' }}>*</span>
+                            </label>
+                            <input
+                                className="edit-form-input"
+                                placeholder="e.g. Phase 1, Foundation, Advanced..."
+                                value={phaseName}
+                                onChange={e => setPhaseName(e.target.value)}
+                                autoFocus
+                            />
+                        </div>
+                        <div>
+                            <label className="edit-form-label">Phase Description</label>
+                            <input
+                                className="edit-form-input"
+                                placeholder="e.g. Introduction to core concepts..."
+                                value={phaseTitle}
+                                onChange={e => setPhaseTitle(e.target.value)}
+                            />
+                        </div>
+                    </div>
+
+                    {/* Legend */}
+                    <div className="build-phase-legend">
+                        <div className="build-legend-item">
+                            <i className="fas fa-folder" style={{ color: 'var(--primary)' }}></i>
+                            <span>Section</span>
+                        </div>
+                        <div className="build-legend-item">
+                            <i className="fas fa-book" style={{ color: 'var(--accent)' }}></i>
+                            <span>Topic</span>
+                        </div>
+                        <div className="build-legend-item">
+                            <i className="fas fa-bookmark" style={{ color: 'var(--secondary)' }}></i>
+                            <span>Subtopic</span>
+                        </div>
+                    </div>
+
+                    {/* Warning about progress */}
+                    <div
+                        className="build-phase-tip"
+                        style={{
+                            borderColor: 'rgba(239,68,68,0.3)',
+                            background: 'rgba(239,68,68,0.07)',
+                            marginBottom: '0.75rem'
+                        }}
+                    >
+                        <i className="fas fa-exclamation-triangle" style={{ color: 'var(--error)', marginRight: '0.375rem' }}></i>
+                        <span>
+                            Note: Removing or reordering items will reset their completion progress.
+                            Items that stay in the same position keep their progress.
+                        </span>
+                    </div>
+
+                    {/* Tree builder */}
+                    <div style={{ marginBottom: '0.5rem' }}>
+                        <div className="build-phase-tree-header">
+                            <label className="edit-form-label" style={{ margin: 0 }}>
+                                <i className="fas fa-sitemap" style={{ marginRight: '0.375rem', color: 'var(--primary)' }}></i>
+                                Phase Structure
+                            </label>
+                            <button
+                                className="btn btn-secondary"
+                                onClick={addSection}
+                                style={{ fontSize: '0.8rem', padding: '0.375rem 0.75rem' }}
+                            >
+                                <i className="fas fa-plus"></i> Add Section
+                            </button>
+                        </div>
+
+                        {sections.length === 0 ? (
+                            <div className="build-phase-empty">
+                                <i className="fas fa-plus-circle" style={{ fontSize: '2rem', marginBottom: '0.5rem', display: 'block', opacity: 0.4 }}></i>
+                                Click "Add Section" to add content to this phase
+                            </div>
+                        ) : (
+                            <div className="build-phase-sections">
+                                {sections.map((section, si) => (
+                                    <div key={section.id} className="builder-section-card">
+
+                                        {/* Section row */}
+                                        <div className="builder-row">
+                                            <i className="fas fa-folder builder-icon" style={{ color: 'var(--primary)' }}></i>
+                                            <input
+                                                className="edit-form-input builder-input"
+                                                placeholder={`Section ${si + 1} — e.g. Getting Started, Core Concepts...`}
+                                                value={section.title}
+                                                onChange={e => updateSection(section.id, e.target.value)}
+                                            />
+                                            <button
+                                                className="btn btn-secondary builder-add-btn"
+                                                onClick={() => addTopic(section.id)}
+                                                title="Add a topic under this section"
+                                            >
+                                                <i className="fas fa-plus"></i> Topic
+                                            </button>
+                                            <button
+                                                className="phase-delete"
+                                                onClick={() => removeSection(section.id)}
+                                                title="Remove section"
+                                            >
+                                                <i className="fas fa-trash"></i>
+                                            </button>
+                                        </div>
+
+                                        {/* Topics */}
+                                        {section.children.length > 0 && (
+                                            <div className="builder-children">
+                                                {section.children.map((topic, ti) => (
+                                                    <div key={topic.id}>
+
+                                                        {/* Topic row */}
+                                                        <div className="builder-row builder-topic-row">
+                                                            <i className="fas fa-book builder-icon" style={{ color: 'var(--accent)', fontSize: '0.875rem' }}></i>
+                                                            <input
+                                                                className="edit-form-input builder-input"
+                                                                placeholder={`Topic ${ti + 1} — e.g. Variables, Functions...`}
+                                                                value={topic.title}
+                                                                onChange={e => updateTopic(section.id, topic.id, e.target.value)}
+                                                                style={{ fontSize: '0.875rem', padding: '0.45rem 0.75rem' }}
+                                                            />
+                                                            <button
+                                                                className="btn btn-secondary builder-add-btn"
+                                                                onClick={() => addSubtopic(section.id, topic.id)}
+                                                                title="Add a subtopic"
+                                                                style={{ fontSize: '0.75rem', padding: '0.3rem 0.5rem' }}
+                                                            >
+                                                                <i className="fas fa-plus"></i> Sub
+                                                            </button>
+                                                            <button
+                                                                className="phase-delete"
+                                                                onClick={() => removeTopic(section.id, topic.id)}
+                                                                title="Remove topic"
+                                                            >
+                                                                <i className="fas fa-trash"></i>
+                                                            </button>
+                                                        </div>
+
+                                                        {/* Subtopics */}
+                                                        {(topic.children || []).length > 0 && (
+                                                            <div className="builder-children builder-subtopics">
+                                                                {topic.children.map((subtopic, sti) => (
+                                                                    <div key={subtopic.id} className="builder-row builder-subtopic-row">
+                                                                        <i className="fas fa-bookmark builder-icon" style={{ color: 'var(--secondary)', fontSize: '0.75rem' }}></i>
+                                                                        <input
+                                                                            className="edit-form-input builder-input"
+                                                                            placeholder={`Subtopic ${sti + 1}...`}
+                                                                            value={subtopic.title}
+                                                                            onChange={e => updateSubtopic(section.id, topic.id, subtopic.id, e.target.value)}
+                                                                            style={{ fontSize: '0.8rem', padding: '0.375rem 0.625rem' }}
+                                                                        />
+                                                                        <button
+                                                                            className="phase-delete"
+                                                                            onClick={() => removeSubtopic(section.id, topic.id, subtopic.id)}
+                                                                            title="Remove subtopic"
+                                                                        >
+                                                                            <i className="fas fa-trash"></i>
+                                                                        </button>
+                                                                    </div>
+                                                                ))}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Tip */}
+                    <div className="build-phase-tip">
+                        <i className="fas fa-lightbulb" style={{ color: 'var(--accent)', marginRight: '0.375rem' }}></i>
+                        <span>Tip: Add, rename, or remove sections, topics, and subtopics freely. Empty fields are automatically skipped when saving.</span>
+                    </div>
+                </div>
+
+                {/* Footer */}
+                <div className="modal-footer">
+                    <button className="btn btn-secondary" onClick={onClose}>
+                        <i className="fas fa-times"></i> Cancel
+                    </button>
+                    <button className="btn btn-primary" onClick={handleSave} disabled={!canSave}>
+                        <i className="fas fa-save"></i> Save Changes
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
 const UploadModal = ({ isOpen, onClose, onUpload, activeRoadmapName }) => {
     const [dragOver, setDragOver] = React.useState(false);
     const fileInputRef = React.useRef(null);
@@ -1649,6 +2004,8 @@ const App = () => {
     const [phaseToDelete, setPhaseToDelete] = React.useState(null);
     const [showRenamePhaseModal, setShowRenamePhaseModal] = React.useState(false);
     const [phaseToRenameIndex, setPhaseToRenameIndex] = React.useState(null);
+    const [showEditPhaseModal, setShowEditPhaseModal] = React.useState(false);
+    const [phaseToEditIndex, setPhaseToEditIndex] = React.useState(null);
 
     // ---- Derived State ----
     const activeRoadmap = roadmaps.find(r => r.id === activeRoadmapId) || null;
@@ -2002,6 +2359,42 @@ const App = () => {
         }
         setShowRenamePhaseModal(false);
         setPhaseToRenameIndex(null);
+    };
+
+    // ============= EDIT PHASE STRUCTURE HANDLERS =============
+    const handleEditPhaseClick = (index) => {
+        setPhaseToEditIndex(index);
+        setShowEditPhaseModal(true);
+    };
+
+    const handleSaveEditedPhase = (phaseData, index) => {
+        try {
+            // Build a fresh tree from the updated data
+            const newRoot = buildTree(phaseData);
+
+            // Preserve completion state: serialize old completionMap keyed by node id,
+            // then apply it to the new tree.  Node ids are positional (e.g. "1.1", "1.1.2"),
+            // so items that stay in the same structural position keep their progress.
+            const oldPhase = phases[index];
+            if (oldPhase) {
+                const oldMap = StorageService.serializeCompletionMap(oldPhase.root);
+                StorageService.applyCompletionMap(newRoot, oldMap);
+            }
+
+            setRoadmaps(prev => prev.map(r => {
+                if (r.id !== activeRoadmapId) return r;
+                const updatedPhases = r.phases.map((p, i) => {
+                    if (i !== index) return p;
+                    return { data: phaseData, root: newRoot };
+                });
+                return { ...r, phases: updatedPhases };
+            }));
+
+            addToast(`Phase "${phaseData.phase}" updated successfully`, 'success');
+        } catch (error) {
+            console.error('Error saving edited phase:', error);
+            addToast('Error saving phase. Please try again.', 'error');
+        }
     };
 
     // ============= EXPAND / COLLAPSE / MARK =============
@@ -2409,6 +2802,7 @@ const App = () => {
                                                     onClick={setActivePhaseIndex}
                                                     onDelete={handleDeletePhase}
                                                     onRename={handleRenamePhaseClick}
+                                                    onEdit={handleEditPhaseClick}
                                                 />
                                             ))}
                                         </div>
@@ -2545,6 +2939,14 @@ const App = () => {
                 isOpen={showBuildPhaseModal}
                 onClose={() => setShowBuildPhaseModal(false)}
                 onCreate={handleBuildPhase}
+            />
+
+            <EditPhaseModal
+                isOpen={showEditPhaseModal}
+                onClose={() => { setShowEditPhaseModal(false); setPhaseToEditIndex(null); }}
+                onSave={handleSaveEditedPhase}
+                phase={phaseToEditIndex !== null ? phases[phaseToEditIndex] : null}
+                phaseIndex={phaseToEditIndex}
             />
 
             <RenameRoadmapModal
